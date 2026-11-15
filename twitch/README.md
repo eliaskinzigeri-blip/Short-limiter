@@ -13,9 +13,8 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
   publiés par Twitch (juste leurs adresses) et, au double appui à gauche, les rejoue avec le lecteur d'Apple
   par-dessus la vidéo, le direct continuant en sourdine. « Revenir au direct », un double appui à droite jusqu'au
   bout, ou la fin de la minute gardée ramènent au direct.
-- **Chat par-dessus la vidéo** : sur les côtés, le double appui ne sert plus qu'à reculer / avancer. Au milieu,
-  il reste celui de Twitch. En plein écran (paysage), un bouton **« 💬 Chat »** en haut à gauche fait la même chose
-  que le double appui de Twitch.
+- **Chat par-dessus la vidéo** : le double appui de Twitch est désactivé (il ne sert plus qu'à reculer / avancer).
+  Le chat s'ouvre et se ferme avec le bouton **« 💬 Chat »** en haut à gauche, en plein écran (paysage).
 - **Retard sur un direct** : si tu as au moins 10 s de retard (réglable), un bouton **« ⏩ Revenir au direct »**
   apparaît en haut à droite ; il saute au direct (lecteur Apple) ou recharge le flux (lecteur Amazon IVS).
 - **Réglages** : appui long à trois doigts → vitesse (×1,5 / ×2 / ×3), pas du double appui, seuil du bouton direct (5 à 30 s),

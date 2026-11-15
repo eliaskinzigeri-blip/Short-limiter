@@ -1,7 +1,7 @@
 // StreamBoost : tweak (.dylib) pour l'app Twitch, chargé par LiveContainer dans l'app que l'utilisateur installe lui-même.
 // - Appui long sur une vidéo à la demande (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste posé.
 // - Double appui à gauche / à droite de la vidéo : −10 s / +10 s (aussi en direct, dans ce que le flux garde).
-// - Le double appui au milieu reste celui de Twitch (chat par-dessus) ; bouton « Chat » en paysage pour le même effet.
+// - Le double appui de Twitch (chat par-dessus la vidéo) est désactivé : le chat s'ouvre avec le bouton « Chat ».
 // - En direct, si on a du retard sur le direct (10 s par défaut) : bouton « Revenir au direct ».
 // Aucun code de Twitch ici : le tweak repère les lecteurs vidéo à l'exécution (AVPlayer d'Apple, IVSPlayer d'Amazon IVS)
 // uniquement par le runtime Objective-C, et vérifie chaque méthode avant de l'appeler.
@@ -517,6 +517,7 @@ static UIWindowScene *SBScene(void) {
     for (UIGestureRecognizer *mine in _seekGRs.allObjects) {
         if (mine.view == t.view.window) [t requireGestureRecognizerToFail:mine];
     }
+    t.enabled = NO; // le chat par-dessus ne s'ouvre plus qu'avec le bouton « Chat »
     SBLogOnce([@"dt-" stringByAppendingString:NSStringFromClass(t.view.class)],
               [NSString stringWithFormat:@"Double appui de l'app repéré sur %@", NSStringFromClass(t.view.class)]);
 }
@@ -546,7 +547,7 @@ static UIWindowScene *SBScene(void) {
     CGFloat bestArea = 0;
     for (UITapGestureRecognizer *t in _appDoubleTaps.allObjects) {
         UIView *v = t.view;
-        if (!v.window || v.window.hidden || !t.enabled) continue;
+        if (!v.window || v.window.hidden) continue;
         BOOL hidden = NO;
         for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.01) { hidden = YES; break; }
         if (hidden) continue;
@@ -563,6 +564,7 @@ static UIWindowScene *SBScene(void) {
     UITapGestureRecognizer *t = [self visibleAppDoubleTap];
     if (!t) { SBLog(@"Chat : aucun double appui de l'app trouvé"); return; }
     _probeFired = NO;
+    t.enabled = YES; // réactivé le temps du déclenchement
     [t addTarget:self action:@selector(probe:)];
     @try { t.state = UIGestureRecognizerStateEnded; } @catch (NSException *e) {}
     [t removeTarget:self action:@selector(probe:)];
@@ -587,6 +589,7 @@ static UIWindowScene *SBScene(void) {
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         @try { if (t.state != UIGestureRecognizerStatePossible) [t reset]; } @catch (NSException *e) {}
+        t.enabled = NO;
     });
 }
 
