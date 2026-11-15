@@ -129,7 +129,7 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
                 default: {
                     UITableViewCell *cell = c.isBlocked
                         ? [self valueCell:@"Shorts bloqués encore" value:SLFormat(c.remainingBlock)]
-                        : [self valueCell:@"Temps restant avant blocage" value:SLFormat(c.remainingBeforeBlock)];
+                        : [self valueCell:@"Temps restant avant blocage" value:c.remainingBeforeBlock < 0 ? @"Aucune limite" : SLFormat(c.remainingBeforeBlock)];
                     cell.detailTextLabel.textColor = c.isBlocked ? UIColor.systemRedColor : UIColor.systemGreenColor;
                     return cell;
                 }

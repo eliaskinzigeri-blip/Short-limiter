@@ -78,7 +78,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     __weak UIViewController *_shortsVC;
     NSString *_hitName;
     NSDate *_lastExit;
-    NSUInteger _exitStep;
+    BOOL _exiting;
     int _ticksSinceSave;
 }
 
@@ -93,12 +93,15 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     if ((self = [super init])) {
         _d = NSUserDefaults.standardUserDefaults;
         [_d registerDefaults:@{
-            SLKey("limit"): @5, SLKey("block"): @30, SLKey("counter"): @YES, SLKey("log"): @YES,
+            SLKey("limit"): @5, SLKey("block"): @30, SLKey("cooldown"): @YES, SLKey("daily"): @NO, SLKey("dailyMin"): @30, SLKey("counter"): @YES, SLKey("log"): @YES,
             SLKey("include"): SLDefaultInclude, SLKey("exclude"): SLDefaultExclude, SLKey("exit"): SLDefaultExit,
         }];
         _limitMinutes = MAX(1, [_d integerForKey:SLKey("limit")]);
         _blockMinutes = MAX(1, [_d integerForKey:SLKey("block")]);
         _showCounter = [_d boolForKey:SLKey("counter")];
+        _cooldownEnabled = [_d boolForKey:SLKey("cooldown")];
+        _dailyEnabled = [_d boolForKey:SLKey("daily")];
+        _dailyMinutes = MAX(1, [_d integerForKey:SLKey("dailyMin")]);
         _logEnabled = [_d boolForKey:SLKey("log")];
         _includeNames = [_d stringForKey:SLKey("include")] ?: SLDefaultInclude;
         _excludeNames = [_d stringForKey:SLKey("exclude")] ?: SLDefaultExclude;
@@ -122,6 +125,13 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 - (void)setLimitMinutes:(NSInteger)v { _limitMinutes = MAX(1, v); [_d setInteger:_limitMinutes forKey:SLKey("limit")]; }
 - (void)setBlockMinutes:(NSInteger)v { _blockMinutes = MAX(1, v); [_d setInteger:_blockMinutes forKey:SLKey("block")]; }
+- (void)setCooldownEnabled:(BOOL)v {
+    _cooldownEnabled = v;
+    [_d setBool:v forKey:SLKey("cooldown")];
+    if (!v) { _blockedUntil = nil; _usedSeconds = 0; [self save]; } // désactiver la règle lève la pause en cours
+}
+- (void)setDailyEnabled:(BOOL)v { _dailyEnabled = v; [_d setBool:v forKey:SLKey("daily")]; }
+- (void)setDailyMinutes:(NSInteger)v { _dailyMinutes = MAX(1, v); [_d setInteger:_dailyMinutes forKey:SLKey("dailyMin")]; }
 - (void)setShowCounter:(BOOL)v { _showCounter = v; [_d setBool:v forKey:SLKey("counter")]; }
 - (void)setLogEnabled:(BOOL)v { _logEnabled = v; [_d setBool:v forKey:SLKey("log")]; [_seen removeAllObjects]; }
 - (void)setIncludeNames:(NSString *)v { _includeNames = [v copy]; [_d setObject:_includeNames forKey:SLKey("include")]; }
@@ -136,9 +146,27 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 #pragma mark État
 
-- (BOOL)isBlocked { return _blockedUntil && _blockedUntil.timeIntervalSinceNow > 0; }
-- (double)remainingBlock { return self.isBlocked ? _blockedUntil.timeIntervalSinceNow : 0; }
+static NSDate *SLNextMidnight(void) {
+    NSCalendar *cal = NSCalendar.currentCalendar;
+    return [cal startOfDayForDate:[cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:NSDate.date options:0]];
+}
+
+- (BOOL)cooldownBlocked { return _cooldownEnabled && _blockedUntil && _blockedUntil.timeIntervalSinceNow > 0; }
+- (BOOL)dailyBlocked { return _dailyEnabled && [_today[@"seconds"] doubleValue] >= _dailyMinutes * 60.0; }
+- (BOOL)isBlocked { return self.cooldownBlocked || self.dailyBlocked; }
+
+- (double)remainingBlock {
+    double r = self.cooldownBlocked ? _blockedUntil.timeIntervalSinceNow : 0;
+    if (self.dailyBlocked) r = MAX(r, SLNextMidnight().timeIntervalSinceNow);
+    return r;
+}
+
 - (double)blockDuration {
+    if (self.dailyBlocked) {
+        double hit = [_today[@"dailyHit"] doubleValue];
+        double end = SLNextMidnight().timeIntervalSince1970;
+        return hit > 0 ? MAX(1, end - hit) : 86400;
+    }
     double start = [_d doubleForKey:SLKey("blockStart")];
     if (!_blockedUntil || start <= 0) return _blockMinutes * 60.0;
     return MAX(1, _blockedUntil.timeIntervalSince1970 - start);
@@ -161,7 +189,15 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     return 90;
 }
 
-- (double)remainingBeforeBlock { return MAX(0, _limitMinutes * 60.0 - _usedSeconds); }
+- (double)remainingBeforeBlock {
+    double r = -1;
+    if (_cooldownEnabled) r = MAX(0, _limitMinutes * 60.0 - _usedSeconds);
+    if (_dailyEnabled) {
+        double d = MAX(0, _dailyMinutes * 60.0 - [_today[@"seconds"] doubleValue]);
+        r = r < 0 ? d : MIN(r, d);
+    }
+    return r;
+}
 - (NSDictionary *)today { return [_today copy]; }
 - (NSArray<NSDictionary *> *)history { return [_history copy]; }
 
@@ -228,7 +264,6 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     if (on != _onShorts) {
         _onShorts = on;
         _matchedName = on ? _hitName : nil;
-        _exitStep = 0;
         if (on) [self bump:@"entries" by:1];
         [self log:on ? [NSString stringWithFormat:@"Shorts : OUI (%@)", _matchedName] : @"Shorts : non"];
     }
@@ -238,7 +273,12 @@ static NSArray<NSString *> *SLParse(NSString *list) {
         double dt = MIN(MAX([now timeIntervalSinceDate:_lastTick], 0), 2);
         _usedSeconds += dt;
         [self bump:@"seconds" by:dt];
-        if (_usedSeconds >= _limitMinutes * 60.0) {
+        if (_dailyEnabled && !_today[@"dailyHit"] && [_today[@"seconds"] doubleValue] >= _dailyMinutes * 60.0) {
+            _today[@"dailyHit"] = @(now.timeIntervalSince1970);
+            [self bump:@"blocks" by:1];
+            [self log:[NSString stringWithFormat:@"Limite du jour atteinte (%ld min) : Shorts bloqués jusqu'à minuit", (long)_dailyMinutes]];
+            [self save];
+        } else if (_cooldownEnabled && _usedSeconds >= _limitMinutes * 60.0) {
             _blockedUntil = [now dateByAddingTimeInterval:_blockMinutes * 60.0];
             [_d setDouble:now.timeIntervalSince1970 forKey:SLKey("blockStart")];
             _usedSeconds = 0;
@@ -382,56 +422,151 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     [self tryExit:YES];
 }
 
-/// Essaie à tour de rôle : fermer l'écran présenté, revenir en arrière, premier onglet, puis toucher
-/// le premier bouton de la barre d'onglets du bas (vues dont le nom contient `exitNames`).
+/// Essaie les méthodes de sortie une par une ; après chacune, vérifie ~1 s plus tard qu'on a quitté les Shorts,
+/// sinon passe à la suivante. Le journal note ce qui a été tenté.
 - (void)tryExit:(BOOL)force {
-    if (!force && _lastExit && -_lastExit.timeIntervalSinceNow < 1.5) return;
+    if (_exiting) return;
+    if (!force && _lastExit && -_lastExit.timeIntervalSinceNow < 4) return;
+    _exiting = YES;
+    [self exitFromStep:0];
+}
+
+- (void)exitFromStep:(NSUInteger)step {
     _lastExit = NSDate.date;
     UIViewController *vc = _shortsVC;
-    for (int i = 0; i < 4; i++) {
-        NSUInteger step = (_exitStep++) % 4;
-        if ([self exitStep:step from:vc]) return;
+    while (step < 6 && ![self exitStep:step from:vc]) step++;
+    if (step >= 6) {
+        [self log:@"Sortie : aucune méthode n'a marché"];
+        _exiting = NO;
+        return;
     }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (![self findShorts]) {
+            [self log:[NSString stringWithFormat:@"Sortie réussie (méthode %lu)", (unsigned long)step]];
+            self->_exiting = NO;
+            [self tick];
+            return;
+        }
+        [self exitFromStep:step + 1];
+    });
 }
 
 - (BOOL)exitStep:(NSUInteger)step from:(UIViewController *)vc {
     @try {
         switch (step) {
-            case 0: { // écran présenté (Short ouvert depuis le fil)
+            case 0: { // Short ouvert par-dessus (depuis le fil, une chaîne…) : on le ferme
                 UIViewController *top = vc;
                 while (top.parentViewController && ![top.parentViewController isKindOfClass:UITabBarController.class]) top = top.parentViewController;
                 if (vc && top.presentingViewController) {
-                    [self log:[NSString stringWithFormat:@"Sortie : fermeture de %@", NSStringFromClass(top.class)]];
+                    [self log:[NSString stringWithFormat:@"Sortie 0 : fermeture de %@", NSStringFromClass(top.class)]];
                     [top.presentingViewController dismissViewControllerAnimated:YES completion:nil];
                     return YES;
                 }
                 return NO;
             }
-            case 1: { // pile de navigation
+            case 1: return [self tapPivot:@"FEwhat_to_watch"];   // onglet Accueil de YouTube
+            case 2: return [self tapLabelled:@[@"accueil", @"home"]];
+            case 3: return [self tapFirstTabByPosition];
+            case 4: { // pile de navigation
                 UINavigationController *nav = vc.navigationController;
                 if (nav && nav.viewControllers.count > 1) {
-                    [self log:@"Sortie : retour à la racine de la navigation"];
+                    [self log:@"Sortie 4 : retour à la racine de la navigation"];
                     [nav popToRootViewControllerAnimated:YES];
                     return YES;
                 }
                 return NO;
             }
-            case 2: { // onglets standard
+            default: { // onglets standard
                 UITabBarController *tab = vc.tabBarController;
                 if (tab && tab.selectedIndex != 0) {
-                    [self log:@"Sortie : premier onglet"];
+                    [self log:@"Sortie 5 : premier onglet"];
                     tab.selectedIndex = 0;
                     return YES;
                 }
                 return NO;
             }
-            default: // barre d'onglets propre à l'app
-                return [self tapFirstTab];
         }
     } @catch (NSException *e) {
-        [self log:[NSString stringWithFormat:@"Sortie : erreur %@", e.reason]];
+        [self log:[NSString stringWithFormat:@"Sortie %lu : erreur %@", (unsigned long)step, e.reason]];
         return NO;
     }
+}
+
+/// Touche le bouton d'un onglet du bas d'après son identifiant YouTube (YTPivotBarItemView.renderer.pivotIdentifier).
+- (BOOL)tapPivot:(NSString *)identifier {
+    NSMutableArray<UIView *> *items = [NSMutableArray array];
+    for (UIWindow *w in [self appWindows]) [self collect:w names:SLParse(_exitNames) into:items depth:0];
+    NSMutableArray *seen = [NSMutableArray array];
+    for (UIView *item in items) {
+        NSString *ident = nil;
+        @try { ident = [[item valueForKey:@"renderer"] valueForKey:@"pivotIdentifier"]; } @catch (NSException *e) {}
+        [seen addObject:ident ?: NSStringFromClass(item.class)];
+        if (![ident isEqual:identifier]) continue;
+        UIControl *button = nil;
+        @try { button = [item valueForKey:@"navigationButton"]; } @catch (NSException *e) {}
+        if (![button isKindOfClass:UIControl.class]) button = [self controlIn:item depth:0];
+        [self log:[NSString stringWithFormat:@"Sortie 1 : onglet %@ (%@)", identifier, button ? NSStringFromClass(button.class) : @"sans bouton"]];
+        if (!button) return NO;
+        [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+        return YES;
+    }
+    [self log:[NSString stringWithFormat:@"Sortie 1 : onglet %@ introuvable (vus : %@)", identifier, [seen componentsJoinedByString:@", "]]];
+    return NO;
+}
+
+- (void)collectLabelled:(UIView *)v labels:(NSArray *)labels minY:(CGFloat)minY into:(NSMutableArray *)out depth:(int)depth {
+    if (depth > 80 || v.hidden || v.alpha < 0.01) return;
+    NSString *label = v.accessibilityLabel.lowercaseString;
+    if (label.length) {
+        CGRect r = [v convertRect:v.bounds toView:nil];
+        for (NSString *l in labels) {
+            if ([label hasPrefix:l] && CGRectGetMinY(r) >= minY) { [out addObject:v]; return; }
+        }
+    }
+    for (UIView *sub in v.subviews) [self collectLabelled:sub labels:labels minY:minY into:out depth:depth + 1];
+}
+
+/// Active une vue ou un ancêtre : bouton (UIControl) ou action d'accessibilité (comme VoiceOver).
+- (BOOL)activate:(UIView *)v {
+    for (UIView *p = v; p; p = p.superview) {
+        if ([p isKindOfClass:UIControl.class] && ((UIControl *)p).enabled) {
+            [(UIControl *)p sendActionsForControlEvents:UIControlEventTouchUpInside];
+            return YES;
+        }
+        if ([p accessibilityActivate]) return YES;
+        if ([p isKindOfClass:UIWindow.class]) break;
+    }
+    return NO;
+}
+
+/// Élément de la barre du bas dont l'étiquette d'accessibilité commence par « Accueil » / « Home ».
+- (BOOL)tapLabelled:(NSArray *)labels {
+    for (UIWindow *w in [self appWindows]) {
+        NSMutableArray<UIView *> *found = [NSMutableArray array];
+        [self collectLabelled:w labels:labels minY:w.bounds.size.height - [self tabBarInset] - 10 into:found depth:0];
+        for (UIView *v in found) {
+            if ([self activate:v]) {
+                [self log:[NSString stringWithFormat:@"Sortie 2 : « %@ » (%@)", v.accessibilityLabel, NSStringFromClass(v.class)]];
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+/// Premier onglet à gauche de la barre du bas, trouvé par sa position à l'écran.
+- (BOOL)tapFirstTabByPosition {
+    CGFloat inset = [self tabBarInset];
+    for (UIWindow *w in [self appWindows]) {
+        CGFloat h = w.bounds.size.height, safe = w.safeAreaInsets.bottom;
+        CGPoint p = CGPointMake(w.bounds.size.width * 0.1, h - inset + (inset - safe) / 2);
+        UIView *hit = [w hitTest:p withEvent:nil];
+        if (hit && [self activate:hit]) {
+            [self log:[NSString stringWithFormat:@"Sortie 3 : toucher en (%.0f, %.0f) sur %@", p.x, p.y, NSStringFromClass(hit.class)]];
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (void)collect:(UIView *)v names:(NSArray *)names into:(NSMutableArray *)out depth:(int)depth {
@@ -451,24 +586,6 @@ static NSArray<NSString *> *SLParse(NSString *list) {
         if (c) return c;
     }
     return nil;
-}
-
-- (BOOL)tapFirstTab {
-    NSArray *names = SLParse(_exitNames);
-    if (!names.count) return NO;
-    NSMutableArray<UIView *> *items = [NSMutableArray array];
-    for (UIWindow *w in [self appWindows]) [self collect:w names:names into:items depth:0];
-    if (!items.count) return NO;
-    [items sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
-        CGFloat xa = [a convertPoint:CGPointZero toView:nil].x, xb = [b convertPoint:CGPointZero toView:nil].x;
-        return xa < xb ? NSOrderedAscending : (xa > xb ? NSOrderedDescending : NSOrderedSame);
-    }];
-    UIControl *c = [self controlIn:items.firstObject depth:0];
-    [self log:[NSString stringWithFormat:@"Sortie : touche %@ (%@)", NSStringFromClass(items.firstObject.class),
-               c ? NSStringFromClass(c.class) : @"aucun bouton"]];
-    if (!c) return NO;
-    [c sendActionsForControlEvents:UIControlEventTouchUpInside];
-    return YES;
 }
 
 #pragma mark Geste des réglages

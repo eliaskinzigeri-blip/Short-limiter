@@ -15,6 +15,9 @@
 // Réglages (enregistrés dans NSUserDefaults)
 @property (nonatomic) NSInteger limitMinutes;   // 5 par défaut
 @property (nonatomic) NSInteger blockMinutes;   // 30 par défaut
+@property (nonatomic) BOOL cooldownEnabled;     // règle 1 : pause de blockMinutes après limitMinutes (oui par défaut)
+@property (nonatomic) BOOL dailyEnabled;        // règle 2 : plus de Shorts jusqu'à minuit après dailyMinutes (non par défaut)
+@property (nonatomic) NSInteger dailyMinutes;   // 30 par défaut
 @property (nonatomic) BOOL showCounter;         // petit compteur en haut de l'écran sur les Shorts
 @property (nonatomic) BOOL logEnabled;          // journal des écrans vus
 @property (nonatomic, copy) NSString *includeNames; // morceaux de noms de classes des écrans Shorts
@@ -26,8 +29,9 @@
 @property (nonatomic, readonly) double usedSeconds;      // temps compté vers la limite
 @property (nonatomic, readonly) NSDate *blockedUntil;
 @property (nonatomic, readonly) BOOL isBlocked;
+@property (nonatomic, readonly) BOOL dailyBlocked;       // limite du jour atteinte (bloqué jusqu'à minuit)
 @property (nonatomic, readonly) double remainingBlock;   // secondes
-@property (nonatomic, readonly) double remainingBeforeBlock;
+@property (nonatomic, readonly) double remainingBeforeBlock; // -1 si aucune règle active
 @property (nonatomic, readonly) double blockDuration;    // durée totale du blocage en cours
 - (CGFloat)tabBarInset;    // hauteur de la barre d'onglets du bas de l'app (bord inférieur compris)
 @property (nonatomic, readonly) NSString *matchedName;   // classe reconnue comme écran Shorts

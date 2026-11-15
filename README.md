@@ -14,7 +14,12 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
   sans contenir un « nom exclu » (`Shelf`, `Thumbnail`, `Cell`…), et qu'il occupe au moins la moitié de l'écran.
 - **Compteur** : seulement quand YouTube est au premier plan et qu'un Short est affiché. Petit compteur en haut de
   l'écran (désactivable).
-- **Limite** réglable (5 min par défaut) puis **blocage** pendant un délai réglable (30 min par défaut) : un écran
+- **Deux règles au choix**, activables séparément ou ensemble :
+  - **Pause après une limite** (activée par défaut) : après 5 min de Shorts (réglable), pause de 30 min (réglable),
+    puis le compteur repart de zéro ;
+  - **Limite quotidienne** (désactivée par défaut) : après 30 min de Shorts dans la journée (réglable), plus de
+    Shorts jusqu'à minuit.
+- **Blocage** : un écran
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de
   YouTube (vidéos, recherche, abonnements) reste utilisable.

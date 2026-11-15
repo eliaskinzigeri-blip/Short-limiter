@@ -102,6 +102,7 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     UILabel *_countdown;
     UILabel *_detail;
     UILabel *_stats;
+    UILabel *_title;
     SLRingView *_ring;
     NSLayoutConstraint *_panelBottom;
     BOOL _settingsOpen;
@@ -172,6 +173,7 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     [inner.centerYAnchor constraintEqualToAnchor:_ring.centerYAnchor].active = YES;
 
     UILabel *title = [UILabel new];
+    _title = title;
     title.text = @"Pause Shorts";
     title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
     title.textColor = UIColor.whiteColor;
@@ -262,7 +264,11 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     _panel.hidden = !block;
     _pill.hidden = !pill;
     if (pill) {
-        NSString *t = [NSString stringWithFormat:@"⏳ %@ / %@", SLFormat(c.usedSeconds), SLFormat(c.limitMinutes * 60.0)];
+        double today = [c.today[@"seconds"] doubleValue];
+        NSString *t = c.cooldownEnabled
+            ? [NSString stringWithFormat:@"⏳ %@ / %@", SLFormat(c.usedSeconds), SLFormat(c.limitMinutes * 60.0)]
+            : c.dailyEnabled ? [NSString stringWithFormat:@"⏳ %@ / %@ aujourd'hui", SLFormat(today), SLFormat(c.dailyMinutes * 60.0)]
+                             : [NSString stringWithFormat:@"⏳ %@ aujourd'hui", SLFormat(today)];
         [UIView performWithoutAnimation:^{
             [self->_pill setTitle:t forState:UIControlStateNormal];
             [self->_pill layoutIfNeeded];
@@ -272,8 +278,15 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
         _panelBottom.constant = -[c tabBarInset];
         _countdown.text = SLFormat(c.remainingBlock);
         _ring.progress = c.blockDuration > 0 ? c.remainingBlock / c.blockDuration : 0;
-        _detail.text = [NSString stringWithFormat:@"Tu as atteint ta limite de %ld min de Shorts. Ils reviennent à la fin du compte à rebours ; le reste de YouTube reste disponible.",
-                        (long)c.limitMinutes];
+        if (c.dailyBlocked) {
+            _title.text = @"Limite du jour atteinte";
+            _detail.text = [NSString stringWithFormat:@"Tu as regardé tes %ld min de Shorts pour aujourd'hui. Ils reviennent à minuit ; le reste de YouTube reste disponible.",
+                            (long)c.dailyMinutes];
+        } else {
+            _title.text = @"Pause Shorts";
+            _detail.text = [NSString stringWithFormat:@"Tu as atteint ta limite de %ld min de Shorts. Ils reviennent à la fin du compte à rebours ; le reste de YouTube reste disponible.",
+                            (long)c.limitMinutes];
+        }
         long blocks = [c.today[@"blocks"] longValue];
         _stats.text = [NSString stringWithFormat:@"Aujourd'hui · %@ de Shorts · %ld pause%@",
                        SLFormat([c.today[@"seconds"] doubleValue]), blocks, blocks > 1 ? @"s" : @""];

@@ -105,8 +105,10 @@ static void SLBuildSection(id manager) {
 
     add(SLItem(@"Statut", nil, ^NSString *{
         SLCore *k = SLCore.shared;
-        return k.isBlocked ? [NSString stringWithFormat:@"En pause encore %@", SLFormat(k.remainingBlock)]
-                           : [NSString stringWithFormat:@"%@ restantes", SLFormat(k.remainingBeforeBlock)];
+        if (k.dailyBlocked) return @"Bloqués jusqu'à minuit";
+        if (k.isBlocked) return [NSString stringWithFormat:@"En pause encore %@", SLFormat(k.remainingBlock)];
+        if (k.remainingBeforeBlock < 0) return @"Aucune limite active";
+        return [NSString stringWithFormat:@"%@ restantes", SLFormat(k.remainingBeforeBlock)];
     }, ^BOOL(id cell, NSUInteger arg) { SLReload(vc); return YES; }));
 
     add(SLItem(@"Ouvertures et pauses aujourd'hui", nil, ^NSString *{
@@ -114,19 +116,35 @@ static void SLBuildSection(id manager) {
         return [NSString stringWithFormat:@"%@ · %@", t[@"entries"], t[@"blocks"]];
     }, ^BOOL(id cell, NSUInteger arg) { return YES; }));
 
-    add(SLItem(@"Limite de temps", @"Temps de Shorts autorisé avant la pause", ^NSString *{
+    // Règle 1 : pause après un temps de Shorts, puis ça recommence
+    add(SLSwitch(@"Pause après une limite", @"Après la limite de temps, les Shorts sont bloqués pendant la durée de pause, puis le compteur repart de zéro",
+                 c.cooldownEnabled, ^BOOL(id cell, BOOL on) { SLCore.shared.cooldownEnabled = on; SLReload(vc); return YES; }));
+
+    add(SLItem(@"Limite avant la pause", @"Temps de Shorts autorisé avant chaque pause", ^NSString *{
         return SLMinutes(SLCore.shared.limitMinutes);
     }, ^BOOL(id cell, NSUInteger arg) {
-        SLPushPicker(manager, vc, @"Limite de temps", @[@1, @2, @3, @5, @10, @15, @20, @30, @45, @60, @90, @120],
+        SLPushPicker(manager, vc, @"Limite avant la pause", @[@1, @2, @3, @5, @10, @15, @20, @30, @45, @60, @90, @120],
                      SLCore.shared.limitMinutes, ^(NSInteger v) { SLCore.shared.limitMinutes = v; });
         return YES;
     }));
 
-    add(SLItem(@"Durée de la pause", @"Les Shorts sont bloqués pendant cette durée une fois la limite atteinte", ^NSString *{
+    add(SLItem(@"Durée de la pause", @"Pendant combien de temps les Shorts restent bloqués", ^NSString *{
         return SLMinutes(SLCore.shared.blockMinutes);
     }, ^BOOL(id cell, NSUInteger arg) {
         SLPushPicker(manager, vc, @"Durée de la pause", @[@5, @10, @15, @20, @30, @45, @60, @90, @120, @180, @240],
                      SLCore.shared.blockMinutes, ^(NSInteger v) { SLCore.shared.blockMinutes = v; });
+        return YES;
+    }));
+
+    // Règle 2 : maximum par jour, puis plus de Shorts jusqu'à minuit
+    add(SLSwitch(@"Limite quotidienne", @"Une fois le maximum du jour atteint, plus de Shorts jusqu'à minuit",
+                 c.dailyEnabled, ^BOOL(id cell, BOOL on) { SLCore.shared.dailyEnabled = on; SLReload(vc); return YES; }));
+
+    add(SLItem(@"Maximum par jour", @"Temps total de Shorts autorisé dans la journée", ^NSString *{
+        return SLMinutes(SLCore.shared.dailyMinutes);
+    }, ^BOOL(id cell, NSUInteger arg) {
+        SLPushPicker(manager, vc, @"Maximum par jour", @[@5, @10, @15, @20, @30, @45, @60, @90, @120, @180],
+                     SLCore.shared.dailyMinutes, ^(NSInteger v) { SLCore.shared.dailyMinutes = v; });
         return YES;
     }));
 
