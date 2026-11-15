@@ -427,6 +427,7 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **vi
     UIButton *_chatButton;
     NSDate *_lastScan;
     BOOL _probeFired;
+    NSDate *_passUntil;   // bouton Chat sans geste connu : les doubles appuis passent à Twitch jusqu'à cette date
 }
 
 + (instancetype)shared {
@@ -498,6 +499,8 @@ static UIWindowScene *SBScene(void) {
     _seekLabel.layer.cornerRadius = 22;
     _seekLabel.clipsToBounds = YES;
     _seekLabel.hidden = YES;
+    _seekLabel.adjustsFontSizeToFitWidth = YES;
+    _seekLabel.minimumScaleFactor = 0.6;
     [root addSubview:_seekLabel];
     _seekX = [_seekLabel.centerXAnchor constraintEqualToAnchor:root.leadingAnchor constant:100];
     _seekY = [_seekLabel.centerYAnchor constraintEqualToAnchor:root.topAnchor constant:200];
@@ -520,7 +523,7 @@ static UIWindowScene *SBScene(void) {
         [_chatButton.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:12],
         [_chatButton.heightAnchor constraintEqualToConstant:34],
         _seekX, _seekY,
-        [_seekLabel.widthAnchor constraintEqualToConstant:120],
+        [_seekLabel.widthAnchor constraintEqualToConstant:180],
         [_seekLabel.heightAnchor constraintEqualToConstant:44],
         [_speedPill.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12],
         [_speedPill.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
@@ -580,6 +583,11 @@ static int SBSide(CGPoint pt, UIView *video) {
 /// Deuxième toucher d'un double appui sur la vidéo : il n'est pas transmis à l'app (aucun geste de Twitch ne se
 /// déclenche, donc pas de chat par-dessus) et le tweak le traite lui-même. Les boutons de Twitch restent normaux.
 - (BOOL)shouldSwallow:(UITouch *)t window:(UIWindow *)w {
+    if (_passUntil && _passUntil.timeIntervalSinceNow > 0) {
+        _passUntil = nil; // ce double appui va à Twitch (chat), les suivants reviennent au tweak
+        SBLog(@"Chat : double appui laissé à Twitch");
+        return NO;
+    }
     CGPoint pt = [t locationInView:w];
     UIView *hit = [w hitTest:pt withEvent:nil];
     for (UIView *v = hit; v && v != w; v = v.superview) {
@@ -657,7 +665,23 @@ static int SBSide(CGPoint pt, UIView *video) {
 /// Bouton « Chat » : déclenche le double appui de Twitch, comme si on avait tapé deux fois au milieu de la vidéo.
 - (void)toggleChat {
     UITapGestureRecognizer *t = [self visibleAppDoubleTap];
-    if (!t) { SBLog(@"Chat : aucun double appui de l'app trouvé"); return; }
+    if (!t) {
+        // Geste de Twitch inconnu (nouvelle version) : le prochain double appui passe à Twitch pendant 4 s
+        _passUntil = [NSDate dateWithTimeIntervalSinceNow:4];
+        SBLog(@"Chat : geste de Twitch inconnu, prochain double appui laissé à Twitch");
+        if ([self ensureWindow]) {
+            _seekLabel.text = @"Tape 2× sur la vidéo";
+            CGRect b = _window.bounds;
+            _seekX.constant = CGRectGetMidX(b);
+            _seekY.constant = CGRectGetMidY(b);
+            _seekUntil = [NSDate dateWithTimeIntervalSinceNow:2.5];
+            [self refreshWithLatency:_lastLatency];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [self refreshWithLatency:self->_lastLatency];
+            });
+        }
+        return;
+    }
     _probeFired = NO;
     [t addTarget:self action:@selector(probe:)];
     @try { t.state = UIGestureRecognizerStateEnded; } @catch (NSException *e) {}
@@ -849,7 +873,7 @@ static int SBSide(CGPoint pt, UIView *video) {
     if (!scene || !UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) return NO;
     BOOL playing = NO;
     for (id p in SBPlayers.allObjects) if (SBIsPlaying(p)) { playing = YES; break; }
-    return playing && [self visibleAppDoubleTap] != nil;
+    return playing;
 }
 
 - (void)refreshWithLatency:(double)latency {

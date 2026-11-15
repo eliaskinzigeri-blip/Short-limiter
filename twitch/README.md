@@ -15,7 +15,8 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
   bout, ou la fin de la minute gardée ramènent au direct.
 - **Chat par-dessus la vidéo** : le second toucher d'un double appui sur la vidéo est intercepté avant Twitch, qui
   ne le voit donc pas (plus de chat par double appui ; les boutons de Twitch restent normaux).
-  Le chat s'ouvre et se ferme avec le bouton **« 💬 Chat »** en haut à gauche, en plein écran (paysage).
+  Le chat s'ouvre et se ferme avec le bouton **« 💬 Chat »** en haut à gauche, en plein écran (paysage). Si le
+  tweak ne connaît pas le geste de cette version de Twitch, le bouton laisse passer le double appui suivant à Twitch.
 - **Retard sur un direct** : si tu as au moins 10 s de retard (réglable), un bouton **« ⏩ Revenir au direct »**
   apparaît en haut à droite ; il saute au direct (lecteur Apple) ou recharge le flux (lecteur Amazon IVS).
 - **Réglages** : appui long à trois doigts → vitesse (×1,5 / ×2 / ×3), pas du double appui, seuil du bouton direct (5 à 30 s),
