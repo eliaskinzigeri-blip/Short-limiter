@@ -359,6 +359,7 @@ static NSDate *SLNextMidnight(void) {
     if (on && self.isBlocked) [self tryExit:NO];
     [[SLOverlay shared] refresh];
     [self installGestures];
+    if (active && !on) SLDecorateSettings();
 }
 
 #pragma mark Détection

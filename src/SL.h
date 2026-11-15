@@ -72,5 +72,6 @@
 
 NSString *SLFormat(double seconds);
 NSString *SLDayName(NSInteger day); // 0 = tous les jours, 1 = lundi … 7 = dimanche
-void SLInstallYouTubeSettings(void); // rubrique dans les Paramètres de YouTube
+void SLInstallYouTubeSettings(void);
+void SLDecorateSettings(void);     // icône barrée de la rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);
