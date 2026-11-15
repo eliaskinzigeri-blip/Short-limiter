@@ -8,8 +8,8 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
 - **Appui long sur une vidéo à la demande** (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste
   posé, avec une pastille « 2× ▶▶ » ; la vitesse normale revient quand tu relâches.
 - **Double appui sur les côtés de la vidéo** : à gauche −10 s, à droite +10 s (réglable : 5 à 30 s) ; les doubles
-  appuis rapprochés s'additionnent (⏪ 20 s, 30 s…). En direct, on peut reculer dans ce que le flux garde en mémoire
-  (selon le lecteur, quelques dizaines de secondes, ou pas du tout : le journal le dit).
+  appuis rapprochés s'additionnent (⏪ 20 s, 30 s…). **En direct, pas de recul** : Twitch utilise le lecteur
+  Amazon IVS, qui ne garde rien en arrière sur un direct ; le double appui y reste donc celui de Twitch.
 - **Chat par-dessus la vidéo** : sur les côtés, le double appui ne sert plus qu'à reculer / avancer. Au milieu,
   il reste celui de Twitch. En plein écran (paysage), un bouton **« 💬 Chat »** en haut à gauche fait la même chose
   que le double appui de Twitch.

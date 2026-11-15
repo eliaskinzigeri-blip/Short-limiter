@@ -194,6 +194,18 @@ static double SBSeekBy(id p, double delta) {
     return target - now;
 }
 
+/// Recul / avance possibles : VOD, ou direct d'un lecteur Apple qui garde une partie du flux (IVS : jamais en direct).
+static BOOL SBCanSeek(id p) {
+    if (SBIsVOD(p)) return YES;
+    if ([p isKindOfClass:AVPlayer.class]) {
+        NSValue *first = ((AVPlayer *)p).currentItem.seekableTimeRanges.firstObject;
+        NSValue *last = ((AVPlayer *)p).currentItem.seekableTimeRanges.lastObject;
+        if (!first || !last) return NO;
+        return CMTimeGetSeconds(CMTimeRangeGetEnd(last.CMTimeRangeValue)) - CMTimeGetSeconds(first.CMTimeRangeValue.start) > 5;
+    }
+    return NO;
+}
+
 #pragma mark Suivi des lecteurs (méthode play)
 
 static NSHashTable *SBPlayers;
@@ -477,7 +489,12 @@ static UIWindowScene *SBScene(void) {
 
 /// Notre double appui ne se déclenche que sur les côtés de la vidéo ; au milieu, il échoue et Twitch garde le sien.
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
-    if ([_seekGRs containsObject:g]) return [self sideAt:g player:NULL video:NULL] != 0;
+    if ([_seekGRs containsObject:g]) {
+        id p = nil;
+        int side = [self sideAt:g player:&p video:NULL];
+        // Direct sans recul possible (lecteur IVS de Twitch) : le double appui reste entièrement celui de Twitch
+        return side != 0 && SBCanSeek(p);
+    }
     return YES;
 }
 
@@ -578,10 +595,18 @@ static UIWindowScene *SBScene(void) {
             id p = SBPlayerAtPoint(w, [g locationInView:w], &chain, NULL);
             SBLogOnce([@"chain-" stringByAppendingString:chain ?: @""], [NSString stringWithFormat:@"Appui long sur : %@ → %@", chain,
                                                                         p ? NSStringFromClass([p class]) : @"aucun lecteur"]);
-            if (!p || !SBIsVOD(p) || !SBIsPlaying(p)) return;
+            if (!p) return;
+            if (!SBIsVOD(p) || !SBIsPlaying(p)) {
+                SBLog([NSString stringWithFormat:@"Appui long : pas d'accélération (%@)", !SBIsVOD(p) ? @"direct" : @"vidéo en pause"]);
+                return;
+            }
             _savedRate = SBRate(p) > 0 ? SBRate(p) : 1;
             _boosted = p;
             SBSetRate(p, SBSpeed());
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                SBLog([NSString stringWithFormat:@"Appui long : vitesse demandée ×%g, vitesse du lecteur ×%g (%@)", SBSpeed(), SBRate(p),
+                       NSStringFromClass([p class])]);
+            });
             UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
             [haptic impactOccurred];
             [self refresh];
