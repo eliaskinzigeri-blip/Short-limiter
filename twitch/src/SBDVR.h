@@ -3,7 +3,8 @@
 #import <UIKit/UIKit.h>
 
 void SBLog(NSString *line);
-NSURL *SBPlayerURL(id player); // adresse du flux du lecteur (propriété path ou adresse captée au chargement)
+NSURL *SBPlayerURL(id player);
+NSString *SBPlayerManifest(id player); // contenu de liste de lecture donné directement au lecteur (loadManifest) // adresse du flux du lecteur (propriété path ou adresse captée au chargement)
 
 @interface SBDVR : NSObject
 + (instancetype)shared;

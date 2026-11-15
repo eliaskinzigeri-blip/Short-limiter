@@ -228,13 +228,49 @@ NSURL *SBPlayerURL(id p) {
     return url ?: objc_getAssociatedObject(p, SBURLKey);
 }
 
-/// Intercepte les méthodes « load…: » du lecteur IVS pour noter l'adresse donnée par Twitch.
+static const void *SBManifestKey = &SBManifestKey;
+
+/// Contenu de liste de lecture (#EXTM3U) donné directement au lecteur, sinon nil.
+static NSString *SBAsManifest(id arg) {
+    NSString *text = nil;
+    if ([arg isKindOfClass:NSString.class]) text = arg;
+    else if ([arg isKindOfClass:NSData.class]) text = [[NSString alloc] initWithData:arg encoding:NSUTF8StringEncoding];
+    return [text containsString:@"#EXTM3U"] ? text : nil;
+}
+
+NSString *SBPlayerManifest(id p) {
+    return objc_getAssociatedObject(p, SBManifestKey);
+}
+
+/// Note l'adresse ou le contenu de la liste de lecture passés au lecteur (premier paramètre de load…/preload…).
+static void SBCapture(id player, NSString *name, id arg) {
+    NSURL *url = SBAsURL(arg);
+    NSString *manifest = SBAsManifest(arg);
+    for (NSString *key in @[@"path", @"url", @"URL", @"manifest"]) {
+        if (url || manifest) break;
+        SEL sel = NSSelectorFromString(key);
+        if (![arg respondsToSelector:sel]) continue;
+        id v = ((id (*)(id, SEL))objc_msgSend)(arg, sel);
+        url = SBAsURL(v);
+        manifest = SBAsManifest(v);
+    }
+    if (url) objc_setAssociatedObject(player, SBURLKey, url, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (manifest) objc_setAssociatedObject(player, SBManifestKey, manifest, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSString *desc = url ? [NSString stringWithFormat:@"adresse %@%@", url.host ?: @"", url.path.lastPathComponent ?: @""]
+                 : manifest ? [NSString stringWithFormat:@"contenu de liste, %lu caractères", (unsigned long)manifest.length]
+                            : [NSString stringWithFormat:@"objet %@", NSStringFromClass([arg class])];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SBLog([NSString stringWithFormat:@"IVS %@ appelé (%@)", name, desc]);
+    });
+}
+
+/// Intercepte les méthodes « load… » / « preload… » du lecteur IVS, à un ou deux paramètres objets.
 static void SBHookIVSLoads(void) {
     Class c = NSClassFromString(@"IVSPlayer");
     if (!c) return;
     unsigned int n = 0;
     Method *methods = class_copyMethodList(c, &n);
-    NSMutableArray *names = [NSMutableArray array];
+    NSMutableArray *names = [NSMutableArray array], *hooked = [NSMutableArray array];
     for (unsigned int i = 0; i < n; i++) {
         SEL sel = method_getName(methods[i]);
         NSString *name = NSStringFromSelector(sel);
@@ -242,26 +278,35 @@ static void SBHookIVSLoads(void) {
         if ([low containsString:@"path"] || [low containsString:@"url"] || [low containsString:@"load"] || [low containsString:@"source"] ||
             [low containsString:@"latency"] || [low containsString:@"seek"])
             [names addObject:name];
-        if (![name hasPrefix:@"load"] || [name componentsSeparatedByString:@":"].count != 2) continue;
-        char *type = method_copyArgumentType(methods[i], 2);
-        BOOL isObject = type && type[0] == '@';
-        free(type);
-        if (!isObject) continue;
-        void (*orig)(id, SEL, id) = (void *)method_getImplementation(methods[i]);
-        method_setImplementation(methods[i], imp_implementationWithBlock(^(id self, id arg) {
-            NSURL *url = SBAsURL(arg);
-            if (!url && [arg respondsToSelector:@selector(path)]) url = SBAsURL(((id (*)(id, SEL))objc_msgSend)(arg, @selector(path)));
-            if (!url && [arg respondsToSelector:@selector(url)]) url = SBAsURL(((id (*)(id, SEL))objc_msgSend)(arg, @selector(url)));
-            if (url) objc_setAssociatedObject(self, SBURLKey, url, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            NSString *desc = url ? [NSString stringWithFormat:@"%@%@", url.host ?: @"", url.path.lastPathComponent ?: @""] : NSStringFromClass([arg class]);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                SBLog([NSString stringWithFormat:@"IVS %@ appelé (%@)", name, desc]);
-            });
-            orig(self, sel, arg);
-        }));
+        if (![name hasPrefix:@"load"] && ![name hasPrefix:@"preload"]) continue;
+        unsigned int argc = method_getNumberOfArguments(methods[i]); // self, _cmd, puis les paramètres
+        if (argc != 3 && argc != 4) continue;
+        BOOL objects = YES;
+        for (unsigned int k = 2; k < argc; k++) {
+            char *type = method_copyArgumentType(methods[i], k);
+            if (!type || type[0] != '@') objects = NO;
+            free(type);
+        }
+        if (!objects) continue;
+        IMP imp = method_getImplementation(methods[i]);
+        if (argc == 3) {
+            void (*orig)(id, SEL, id) = (void *)imp;
+            method_setImplementation(methods[i], imp_implementationWithBlock(^(id self, id a) {
+                SBCapture(self, name, a);
+                orig(self, sel, a);
+            }));
+        } else {
+            void (*orig)(id, SEL, id, id) = (void *)imp;
+            method_setImplementation(methods[i], imp_implementationWithBlock(^(id self, id a, id b) {
+                SBCapture(self, name, a);
+                orig(self, sel, a, b);
+            }));
+        }
+        [hooked addObject:name];
     }
     free(methods);
-    SBLog([NSString stringWithFormat:@"IVSPlayer : méthodes utiles %@", [names componentsJoinedByString:@", "]]);
+    SBLog([NSString stringWithFormat:@"IVSPlayer : méthodes utiles %@ — interceptées : %@", [names componentsJoinedByString:@", "],
+           [hooked componentsJoinedByString:@", "]]);
 }
 
 #pragma mark Suivi des lecteurs (méthode play)
@@ -751,7 +796,7 @@ static int SBSide(CGPoint pt, UIView *video) {
         SBLogOnce([NSString stringWithFormat:@"state-%ld-%d", (long)st, (int)CMTIME_IS_INDEFINITE(d)],
                   [NSString stringWithFormat:@"Lecteur %@ : état %ld, durée %@, adresse %@", NSStringFromClass([p class]), (long)st,
                    CMTIME_IS_INDEFINITE(d) ? @"indéfinie (direct)" : [NSString stringWithFormat:@"%.0f s", CMTimeGetSeconds(d)],
-                   SBPlayerURL(p) ? @"connue" : @"inconnue"]);
+                   SBPlayerURL(p) ? @"connue" : (SBPlayerManifest(p) ? @"contenu de liste connu" : @"inconnue")]);
     }
     // Mémoire de la dernière minute du direct (lecteur IVS)
     Class ivs = SBIVS();

@@ -15,6 +15,7 @@ static NSString *const SBScheme = @"sbdvr";
     NSMutableArray<NSDictionary *> *_segs;  // { url, dur, disc }
     NSMutableSet<NSString *> *_known;
     BOOL _fetching, _resolving;
+    NSString *_manifestText; // contenu de la liste principale quand Twitch le donne directement
     NSDate *_lastPoll;
     int _failures;
 
@@ -64,6 +65,12 @@ static NSString *const SBScheme = @"sbdvr";
     }
     _ivs = player;
     NSURL *path = SBPlayerURL(player);
+    NSString *manifest = path ? nil : SBPlayerManifest(player);
+    if (!path && manifest) {
+        // Twitch donne le contenu de la liste au lecteur (loadManifest) : on part de ce contenu
+        path = [NSURL URLWithString:[NSString stringWithFormat:@"sbmanifest://liste/%lu", (unsigned long)manifest.hash]];
+        _manifestText = manifest;
+    }
     if (!path) {
         static BOOL said;
         if (!said) { said = YES; SBLog(@"Mémoire du direct : adresse du flux inconnue (le lecteur ne la donne pas)"); }
@@ -115,7 +122,7 @@ static NSDictionary *SBAttrs(NSString *line) {
     if (_resolving) return;
     _resolving = YES;
     NSURL *source = _source;
-    [self fetch:source done:^(NSString *text, NSURL *finalURL) {
+    void (^handle)(NSString *, NSURL *) = ^(NSString *text, NSURL *finalURL) {
         self->_resolving = NO;
         if (!text || ![source isEqual:self->_source]) return;
         if (![text containsString:@"#EXT-X-STREAM-INF"]) {
@@ -150,7 +157,18 @@ static NSDictionary *SBAttrs(NSString *line) {
         self->_media = best;
         SBLog(best ? [NSString stringWithFormat:@"Mémoire du direct : qualité %@ choisie", bestName]
                    : @"Mémoire du direct : aucune qualité vidéo trouvée dans la liste principale");
-    }];
+    };
+    if ([source.scheme isEqualToString:@"sbmanifest"]) {
+        NSString *text = _manifestText;
+        if (![text containsString:@"#EXT-X-STREAM-INF"]) {
+            _resolving = NO;
+            SBLog(@"Mémoire du direct : le contenu donné au lecteur n'est pas une liste principale (pas d'adresse à suivre)");
+            return;
+        }
+        handle(text, nil);
+    } else {
+        [self fetch:source done:handle];
+    }
 }
 
 - (void)poll {
