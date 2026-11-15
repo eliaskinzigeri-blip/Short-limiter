@@ -216,12 +216,12 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
     if (ip.section != SLDetection) return;
     SLCore *c = SLCore.shared;
     switch (ip.row) {
-        case 0: [self editList:@"Noms recherchés" value:c.includeNames save:^(NSString *v) { c.includeNames = v; }]; break;
-        case 1: [self editList:@"Noms exclus" value:c.excludeNames save:^(NSString *v) { c.excludeNames = v; }]; break;
-        case 2: [self editList:@"Barre d'onglets" value:c.exitNames save:^(NSString *v) { c.exitNames = v; }]; break;
-        case 4: [self.navigationController pushViewController:[SLLogController new] animated:YES]; break;
-        case 5: [c clearLog]; break;
-        case 6: [c resetDetectionNames]; [tableView reloadData]; break;
+        case 0: { [self editList:@"Noms recherchés" value:c.includeNames save:^(NSString *v) { c.includeNames = v; }]; break; }
+        case 1: { [self editList:@"Noms exclus" value:c.excludeNames save:^(NSString *v) { c.excludeNames = v; }]; break; }
+        case 2: { [self editList:@"Barre d'onglets" value:c.exitNames save:^(NSString *v) { c.exitNames = v; }]; break; }
+        case 4: { [self.navigationController pushViewController:[SLLogController new] animated:YES]; break; }
+        case 5: { [c clearLog]; break; }
+        case 6: { [c resetDetectionNames]; [tableView reloadData]; break; }
         default: break;
     }
 }
