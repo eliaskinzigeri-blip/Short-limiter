@@ -52,6 +52,7 @@
 
 // Journal
 - (void)log:(NSString *)line;
+- (void)logOnce:(NSString *)key text:(NSString *)line;
 - (NSString *)logPath;
 - (NSString *)logText;
 - (void)clearLog;
@@ -76,5 +77,8 @@ void SLInstallYouTubeSettings(void);
 void SLInstallPiPCompat(void);       // PiP noir : rendu vidéo classique
 BOOL SLPiPCompatEnabled(void);
 void SLSetPiPCompatEnabled(BOOL on);
+UIViewController *SLVisiblePlayerVC(void); // lecteur vidéo de YouTube affiché
+BOOL SLPiPAllowed(UIViewController *playerVC);  // YouTube autorise le PiP sur ce compte
+void SLStartPiP(UIViewController *playerVC);
 void SLDecorateSettings(void);     // icône barrée de la rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);

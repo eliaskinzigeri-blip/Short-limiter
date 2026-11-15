@@ -671,6 +671,14 @@ static NSDate *SLNextMidnight(void) {
     return [docs stringByAppendingPathComponent:@"ShortLimiter-journal.txt"];
 }
 
+- (void)logOnce:(NSString *)key text:(NSString *)line {
+    static NSMutableSet *done;
+    if (!done) done = [NSMutableSet set];
+    if ([done containsObject:key]) return;
+    [done addObject:key];
+    [self log:line];
+}
+
 - (void)log:(NSString *)line {
     if (!_logEnabled) return;
     static NSDateFormatter *f;
