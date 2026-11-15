@@ -1,5 +1,6 @@
 // StreamBoost : tweak (.dylib) pour l'app Twitch, chargé par LiveContainer dans l'app que l'utilisateur installe lui-même.
 // - Appui long sur une vidéo à la demande (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste posé.
+// - Double appui à gauche / à droite de la vidéo : −10 s / +10 s (aussi en direct, dans ce que le flux garde).
 // - En direct, si on a du retard sur le direct (10 s par défaut) : bouton « Revenir au direct ».
 // Aucun code de Twitch ici : le tweak repère les lecteurs vidéo à l'exécution (AVPlayer d'Apple, IVSPlayer d'Amazon IVS)
 // uniquement par le runtime Objective-C, et vérifie chaque méthode avant de l'appeler.
@@ -52,6 +53,11 @@ static float SBSpeed(void) {
 }
 static double SBThreshold(void) {
     double v = [NSUserDefaults.standardUserDefaults doubleForKey:SBKey("threshold")];
+    return v > 0 ? v : 10.0;
+}
+
+static double SBStep(void) {
+    double v = [NSUserDefaults.standardUserDefaults doubleForKey:SBKey("step")];
     return v > 0 ? v : 10.0;
 }
 
@@ -152,6 +158,40 @@ static void SBJumpToLive(id p) {
     }
 }
 
+/// Recule (delta < 0) ou avance dans la vidéo, dans les limites de ce que le lecteur garde.
+/// Retourne le décalage réellement appliqué (0 si impossible).
+static double SBSeekBy(id p, double delta) {
+    if ([p isKindOfClass:AVPlayer.class]) {
+        AVPlayer *av = p;
+        AVPlayerItem *item = av.currentItem;
+        if (!item) return 0;
+        double now = CMTimeGetSeconds(item.currentTime);
+        double lo = 0, hi = now + fabs(delta);
+        NSValue *first = item.seekableTimeRanges.firstObject, *last = item.seekableTimeRanges.lastObject;
+        if (first && last) {
+            lo = CMTimeGetSeconds(first.CMTimeRangeValue.start);
+            hi = CMTimeGetSeconds(CMTimeRangeGetEnd(last.CMTimeRangeValue));
+        } else if (SBIsVOD(p)) {
+            hi = CMTimeGetSeconds(SBDuration(p));
+        } else {
+            return 0;
+        }
+        double target = MAX(lo, MIN(hi - 0.5, now + delta));
+        if (fabs(target - now) < 0.5) return 0;
+        [av seekToTime:CMTimeMakeWithSeconds(target, 600) toleranceBefore:CMTimeMakeWithSeconds(0.3, 600)
+        toleranceAfter:CMTimeMakeWithSeconds(0.3, 600) completionHandler:nil];
+        return target - now;
+    }
+    // IVS : recherche possible sur les vidéos à la demande seulement
+    if (!SBIsVOD(p) || ![p respondsToSelector:@selector(seekTo:)]) return 0;
+    double now = CMTimeGetSeconds(SBTime(p, @selector(position)));
+    double dur = CMTimeGetSeconds(SBDuration(p));
+    if (isnan(now)) return 0;
+    double target = MAX(0, MIN(dur - 0.5, now + delta));
+    ((void (*)(id, SEL, CMTime))objc_msgSend)(p, @selector(seekTo:), CMTimeMakeWithSeconds(target, 600));
+    return target - now;
+}
+
 #pragma mark Suivi des lecteurs (méthode play)
 
 static NSHashTable *SBPlayers;
@@ -207,7 +247,7 @@ static id SBPlayerInView(UIView *v, int depth) {
 }
 
 /// Lecteur sous le doigt : on remonte depuis la vue touchée tant qu'elle reste à peu près de la taille de la vidéo.
-static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain) {
+static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **videoView) {
     UIView *hit = [w hitTest:pt withEvent:nil];
     NSMutableArray *names = [NSMutableArray array];
     for (UIView *v = hit; v && v != w; v = v.superview) {
@@ -217,6 +257,7 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain) {
         id p = SBPlayerInView(v, 0);
         if (p) {
             if (chain) *chain = [names componentsJoinedByString:@" < "];
+            if (videoView) *videoView = v;
             return p;
         }
         if (v.bounds.size.height > w.bounds.size.height * 0.95 && v.bounds.size.width > w.bounds.size.width * 0.95) break;
@@ -256,6 +297,12 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain) {
     float _savedRate;
     __weak id _livePlayer;
     NSTimer *_timer;
+    UILabel *_seekLabel;
+    NSLayoutConstraint *_seekX, *_seekY;
+    NSDate *_seekUntil;
+    double _seekTotal;    // cumul des doubles appuis rapprochés (−10, −20, …)
+    NSDate *_lastSeek;
+    double _lastLatency;
 }
 
 + (instancetype)shared {
@@ -318,8 +365,24 @@ static UIWindowScene *SBScene(void) {
     [_liveButton addTarget:self action:@selector(goLive) forControlEvents:UIControlEventTouchUpInside];
     [root addSubview:_liveButton];
 
+    _seekLabel = [UILabel new];
+    _seekLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _seekLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    _seekLabel.textColor = UIColor.whiteColor;
+    _seekLabel.textAlignment = NSTextAlignmentCenter;
+    _seekLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    _seekLabel.layer.cornerRadius = 22;
+    _seekLabel.clipsToBounds = YES;
+    _seekLabel.hidden = YES;
+    [root addSubview:_seekLabel];
+    _seekX = [_seekLabel.centerXAnchor constraintEqualToAnchor:root.leadingAnchor constant:100];
+    _seekY = [_seekLabel.centerYAnchor constraintEqualToAnchor:root.topAnchor constant:200];
+
     UILayoutGuide *safe = root.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
+        _seekX, _seekY,
+        [_seekLabel.widthAnchor constraintEqualToConstant:120],
+        [_seekLabel.heightAnchor constraintEqualToConstant:44],
         [_speedPill.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12],
         [_speedPill.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
         [_speedPill.widthAnchor constraintEqualToConstant:96],
@@ -351,6 +414,13 @@ static UIWindowScene *SBScene(void) {
         boost.delaysTouchesBegan = NO;
         boost.delegate = self;
         [w addGestureRecognizer:boost];
+        UITapGestureRecognizer *seek = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(doubleTap:)];
+        seek.numberOfTapsRequired = 2;
+        seek.cancelsTouchesInView = NO;
+        seek.delaysTouchesBegan = NO;
+        seek.delaysTouchesEnded = NO;
+        seek.delegate = self;
+        [w addGestureRecognizer:seek];
         UILongPressGestureRecognizer *settings = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(settings:)];
         settings.numberOfTouchesRequired = 3;
         settings.minimumPressDuration = 0.8;
@@ -371,7 +441,7 @@ static UIWindowScene *SBScene(void) {
     switch (g.state) {
         case UIGestureRecognizerStateBegan: {
             NSString *chain = nil;
-            id p = SBPlayerAtPoint(w, [g locationInView:w], &chain);
+            id p = SBPlayerAtPoint(w, [g locationInView:w], &chain, NULL);
             SBLogOnce([@"chain-" stringByAppendingString:chain ?: @""], [NSString stringWithFormat:@"Appui long sur : %@ → %@", chain,
                                                                         p ? NSStringFromClass([p class]) : @"aucun lecteur"]);
             if (!p || !SBIsVOD(p) || !SBIsPlaying(p)) return;
@@ -394,6 +464,42 @@ static UIWindowScene *SBScene(void) {
         }
         default: break;
     }
+}
+
+#pragma mark Double appui sur les côtés : reculer / avancer
+
+- (void)doubleTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    UIWindow *w = (UIWindow *)g.view;
+    CGPoint pt = [g locationInView:w];
+    NSString *chain = nil;
+    UIView *video = nil;
+    id p = SBPlayerAtPoint(w, pt, &chain, &video);
+    if (!p || !video) return;
+    CGRect r = [video convertRect:video.bounds toView:nil];
+    double x = (pt.x - CGRectGetMinX(r)) / MAX(1, r.size.width);
+    if (x > 0.38 && x < 0.62) return; // milieu : on laisse l'app gérer
+    double sign = x <= 0.38 ? -1 : 1;
+    double applied = SBSeekBy(p, sign * SBStep());
+    BOOL chained = _lastSeek && -_lastSeek.timeIntervalSinceNow < 1.2 && (_seekTotal * sign) > 0;
+    _seekTotal = (chained ? _seekTotal : 0) + applied;
+    _lastSeek = NSDate.date;
+    SBLog([NSString stringWithFormat:@"Double appui %@ : %+.0f s demandé, %+.1f s appliqué (%@, %@)", sign < 0 ? @"gauche" : @"droite",
+           sign * SBStep(), applied, SBIsLive(p) ? @"direct" : @"vidéo", NSStringFromClass([p class])]);
+    if (![self ensureWindow]) return;
+    if (fabs(applied) < 0.5) {
+        _seekLabel.text = sign < 0 ? @"Début atteint" : @"Déjà au direct";
+        if (sign < 0 && SBIsLive(p)) _seekLabel.text = @"Retour impossible";
+    } else {
+        _seekLabel.text = sign < 0 ? [NSString stringWithFormat:@"⏪ %.0f s", _seekTotal] : [NSString stringWithFormat:@"+%.0f s ⏩", _seekTotal];
+    }
+    _seekX.constant = CGRectGetMinX(r) + r.size.width * (sign < 0 ? 0.2 : 0.8);
+    _seekY.constant = CGRectGetMidY(r);
+    _seekUntil = [NSDate dateWithTimeIntervalSinceNow:0.9];
+    [self refreshWithLatency:_lastLatency];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self refreshWithLatency:self->_lastLatency];
+    });
 }
 
 #pragma mark Bouton « Revenir au direct »
@@ -423,20 +529,24 @@ static UIWindowScene *SBScene(void) {
         }
     }
     _livePlayer = best;
+    _lastLatency = best ? bestLatency : -1;
     if (best && bestLatency >= SBThreshold())
         SBLogOnce(@"late", [NSString stringWithFormat:@"Retard sur le direct détecté : %.0f s (%@)", bestLatency, NSStringFromClass([best class])]);
     [self refreshWithLatency:best ? bestLatency : -1];
 }
 
-- (void)refresh { [self refreshWithLatency:-1]; }
+- (void)refresh { [self refreshWithLatency:_lastLatency]; }
 
 - (void)refreshWithLatency:(double)latency {
     BOOL speed = _boosted != nil;
     BOOL live = latency >= SBThreshold();
-    if (!speed && !live) {
+    BOOL seek = _seekUntil && _seekUntil.timeIntervalSinceNow > 0;
+    _seekLabel.hidden = !seek;
+    if (!speed && !live && !seek) {
         if (_window) {
             _speedPill.hidden = YES;
             _liveButton.hidden = YES;
+            _seekLabel.hidden = YES;
             _window.hidden = YES;
         }
         return;
@@ -470,13 +580,19 @@ static UIWindowScene *SBScene(void) {
     if (g.state != UIGestureRecognizerStateBegan) return;
     UIViewController *top = [self topController];
     if (!top || [top isKindOfClass:UIAlertController.class]) return;
-    NSString *msg = [NSString stringWithFormat:@"Appui long sur une vidéo : ×%g\nBouton direct à partir de %.0f s de retard\nVersion %s",
-                     SBSpeed(), SBThreshold(), SB_VERSION];
+    NSString *msg = [NSString stringWithFormat:@"Appui long sur une vidéo : ×%g\nDouble appui à gauche / à droite : −/+%.0f s\nBouton direct à partir de %.0f s de retard\nVersion %s",
+                     SBSpeed(), SBStep(), SBThreshold(), SB_VERSION];
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"StreamBoost" message:msg preferredStyle:UIAlertControllerStyleActionSheet];
     for (NSNumber *s in @[@1.5, @2, @3]) {
         [a addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Vitesse de l'appui long : ×%g%@", s.floatValue, fabsf(s.floatValue - SBSpeed()) < 0.01 ? @" ✓" : @""]
                                               style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
             [NSUserDefaults.standardUserDefaults setFloat:s.floatValue forKey:SBKey("speed")];
+        }]];
+    }
+    for (NSNumber *st in @[@5, @10, @15, @30]) {
+        [a addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Double appui : %@ s%@", st, fabs(st.doubleValue - SBStep()) < 0.5 ? @" ✓" : @""]
+                                              style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            [NSUserDefaults.standardUserDefaults setDouble:st.doubleValue forKey:SBKey("step")];
         }]];
     }
     for (NSNumber *t in @[@5, @10, @20, @30]) {

@@ -7,9 +7,12 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
 
 - **Appui long sur une vidéo à la demande** (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste
   posé, avec une pastille « 2× ▶▶ » ; la vitesse normale revient quand tu relâches.
+- **Double appui sur les côtés de la vidéo** : à gauche −10 s, à droite +10 s (réglable : 5 à 30 s) ; les doubles
+  appuis rapprochés s'additionnent (⏪ 20 s, 30 s…). En direct, on peut reculer dans ce que le flux garde en mémoire
+  (selon le lecteur, quelques dizaines de secondes, ou pas du tout : le journal le dit).
 - **Retard sur un direct** : si tu as au moins 10 s de retard (réglable), un bouton **« ⏩ Revenir au direct »**
   apparaît en haut à droite ; il saute au direct (lecteur Apple) ou recharge le flux (lecteur Amazon IVS).
-- **Réglages** : appui long à trois doigts → vitesse (×1,5 / ×2 / ×3), seuil du bouton direct (5 à 30 s),
+- **Réglages** : appui long à trois doigts → vitesse (×1,5 / ×2 / ×3), pas du double appui, seuil du bouton direct (5 à 30 s),
   partage du journal.
 
 ## Installation
