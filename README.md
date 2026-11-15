@@ -23,8 +23,6 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
   le jour modifié, « Copier vers un autre jour » recopie ses réglages (par exemple lundi → mardi et jeudi).
 - **Bouton PiP** sur le lecteur vidéo : dans LiveContainer, le PiP automatique en quittant l'app ne se déclenche pas ;
   le bouton lance le PiP de YouTube. Il n'apparaît que si YouTube autorise le PiP sur le compte (en France : Premium).
-- **PiP : mode compatibilité** (activé par défaut) : si le PiP affiche un écran noir avec le son, YouTube utilise
-  le rendu vidéo classique d'Apple, qui s'affiche en PiP. Ne débloque rien : le PiP doit déjà démarrer.
 - **Blocage** : un écran
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de

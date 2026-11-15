@@ -8,8 +8,8 @@
 static NSString *const SLPiPKey = @"ShortLimiter.pipCompat";
 
 BOOL SLPiPCompatEnabled(void) {
-    NSNumber *v = [NSUserDefaults.standardUserDefaults objectForKey:SLPiPKey];
-    return v ? v.boolValue : YES;
+    // Désactivé : le rendu 2 (Metal) empêche le PiP d'Apple (« possible : non » dans le journal). Code gardé pour essais.
+    return NO;
 }
 
 void SLSetPiPCompatEnabled(BOOL on) {
@@ -123,6 +123,10 @@ void SLStartPiP(UIViewController *playerVC) {
         ((void (*)(id, SEL))objc_msgSend)(controller, @selector(maybeInvokePictureInPicture));
     AVPictureInPictureController *av = SLAVPiP(controller);
     if (av.pictureInPicturePossible && !av.pictureInPictureActive) [av startPictureInPicture];
-    [SLCore.shared log:[NSString stringWithFormat:@"PiP : demandé (contrôleur Apple %@, possible %@)", av ? @"trouvé" : @"absent",
-                        av.pictureInPicturePossible ? @"oui" : @"non"]];
+    UIView *render = SLKVC(SLKVC(controller, @"_pipController"), @"HAMPlayerView");
+    [SLCore.shared log:[NSString stringWithFormat:@"PiP : demandé (contrôleur Apple %@, possible %@, rendu %@)", av ? @"trouvé" : @"absent",
+                        av.pictureInPicturePossible ? @"oui" : @"non", render ? NSStringFromClass(render.class) : @"?"]];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [SLCore.shared log:[NSString stringWithFormat:@"PiP : %@", av.pictureInPictureActive ? @"actif" : @"pas démarré"]];
+    });
 }
