@@ -215,9 +215,6 @@ static void SLBuildSection(id manager) {
         return YES;
     }));
 
-    add(SLSwitch(@"PiP : rendu alternatif", @"Essai contre le PiP noir (ancien mode de rendu vidéo de YouTube). Relance YouTube après un changement ; désactive-le si la vidéo s'affiche mal",
-                 SLPiPCompatEnabled(), ^BOOL(id cell, BOOL on) { SLSetPiPCompatEnabled(on); return YES; }));
-
     add(SLSwitch(@"Compteur pendant les Shorts", @"Affiche le temps utilisé en haut de l'écran", c.showCounter,
                  ^BOOL(id cell, BOOL on) { SLCore.shared.showCounter = on; return YES; }));
 

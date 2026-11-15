@@ -9,8 +9,8 @@ static NSString *const SLPiPKey = @"ShortLimiter.pipCompat";
 
 BOOL SLPiPCompatEnabled(void) {
     // Rendu 3 (ancien calque à images). Le 2 (Metal) empêchait le PiP ; le 6 (par défaut) reste bloqué (« prêt non »).
-    NSNumber *v = [NSUserDefaults.standardUserDefaults objectForKey:SLPiPKey];
-    return v ? v.boolValue : YES;
+    // Essais abandonnés : le rendu 2 (Metal) empêche le PiP, le rendu 3 empêche la lecture. Non installé.
+    return NO;
 }
 
 void SLSetPiPCompatEnabled(BOOL on) {
