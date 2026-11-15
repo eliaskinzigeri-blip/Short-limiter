@@ -1,7 +1,8 @@
 // StreamBoost : tweak (.dylib) pour l'app Twitch, chargé par LiveContainer dans l'app que l'utilisateur installe lui-même.
 // - Appui long sur une vidéo à la demande (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste posé.
 // - Double appui à gauche / à droite de la vidéo : −10 s / +10 s (aussi en direct, dans ce que le flux garde).
-// - Le double appui de Twitch (chat par-dessus la vidéo) est désactivé : le chat s'ouvre avec le bouton « Chat ».
+// - Le double appui sur la vidéo est intercepté avant Twitch (plus de chat par double appui) : le chat s'ouvre
+//   avec le bouton « Chat ».
 // - En direct, si on a du retard sur le direct (10 s par défaut) : bouton « Revenir au direct ».
 // Aucun code de Twitch ici : le tweak repère les lecteurs vidéo à l'exécution (AVPlayer d'Apple, IVSPlayer d'Amazon IVS)
 // uniquement par le runtime Objective-C, et vérifie chaque méthode avant de l'appeler.
@@ -302,6 +303,9 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **vi
 @end
 
 @interface SBCore : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+- (BOOL)shouldSwallow:(UITouch *)t window:(UIWindow *)w;
+- (void)swallowedTapEnded:(UITouch *)t window:(UIWindow *)w;
 @end
 
 @implementation SBCore {
@@ -318,7 +322,6 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **vi
     double _seekTotal;    // cumul des doubles appuis rapprochés (−10, −20, …)
     NSDate *_lastSeek;
     double _lastLatency;
-    NSHashTable *_seekGRs;      // nos doubles appuis (un par fenêtre)
     NSHashTable *_appDoubleTaps; // doubles appuis de Twitch sur la vidéo (chat par-dessus)
     UIButton *_chatButton;
     NSDate *_lastScan;
@@ -449,15 +452,6 @@ static UIWindowScene *SBScene(void) {
         boost.delaysTouchesBegan = NO;
         boost.delegate = self;
         [w addGestureRecognizer:boost];
-        UITapGestureRecognizer *seek = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(doubleTap:)];
-        seek.numberOfTapsRequired = 2;
-        seek.cancelsTouchesInView = NO;
-        seek.delaysTouchesBegan = NO;
-        seek.delaysTouchesEnded = NO;
-        seek.delegate = self;
-        [w addGestureRecognizer:seek];
-        if (!_seekGRs) _seekGRs = [NSHashTable weakObjectsHashTable];
-        [_seekGRs addObject:seek];
         UILongPressGestureRecognizer *settings = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(settings:)];
         settings.numberOfTouchesRequired = 3;
         settings.minimumPressDuration = 0.8;
@@ -471,53 +465,53 @@ static UIWindowScene *SBScene(void) {
     return YES;
 }
 
-/// Côté de la vidéo touché : -1 gauche, +1 droite, 0 milieu ou pas de vidéo.
-- (int)sideAt:(UIGestureRecognizer *)g player:(id *)player video:(UIView **)video {
-    UIWindow *w = (UIWindow *)g.view;
-    CGPoint pt = [g locationInView:w];
-    UIView *v = nil;
-    id p = SBPlayerAtPoint(w, pt, NULL, &v);
-    if (player) *player = p;
-    if (video) *video = v;
-    if (!p || !v) return 0;
-    [self linkAppDoubleTapsFrom:[w hitTest:pt withEvent:nil]];
-    CGRect r = [v convertRect:v.bounds toView:nil];
+/// Côté de la vidéo touché : -1 gauche, +1 droite, 0 milieu.
+static int SBSide(CGPoint pt, UIView *video) {
+    CGRect r = [video convertRect:video.bounds toView:nil];
     double x = (pt.x - CGRectGetMinX(r)) / MAX(1, r.size.width);
     if (x <= 0.38) return -1;
     if (x >= 0.62) return 1;
     return 0;
 }
 
-/// Notre double appui ne se déclenche que sur les côtés de la vidéo ; au milieu, il échoue et Twitch garde le sien.
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
-    if ([_seekGRs containsObject:g]) {
-        id p = nil;
-        int side = [self sideAt:g player:&p video:NULL];
-        // Direct sans recul possible (lecteur IVS de Twitch) : le double appui reste entièrement celui de Twitch
-        if (side == 0) return NO;
-        if (SBCanSeek(p)) return YES;
-        // Direct IVS : recul possible grâce à la mémoire de la dernière minute
-        SBDVR *dvr = SBDVR.shared;
-        return SBIsLive(p) && (dvr.replaying || (side < 0 && dvr.bufferedSeconds >= 3));
+#pragma mark Interception du double appui (avant Twitch)
+
+/// Deuxième toucher d'un double appui sur la vidéo : il n'est pas transmis à l'app (aucun geste de Twitch ne se
+/// déclenche, donc pas de chat par-dessus) et le tweak le traite lui-même. Les boutons de Twitch restent normaux.
+- (BOOL)shouldSwallow:(UITouch *)t window:(UIWindow *)w {
+    CGPoint pt = [t locationInView:w];
+    UIView *hit = [w hitTest:pt withEvent:nil];
+    for (UIView *v = hit; v && v != w; v = v.superview) {
+        if ([v isKindOfClass:UIControl.class] && ![NSStringFromClass(v.class).lowercaseString containsString:@"player"]) return NO;
     }
+    UIView *video = nil;
+    id p = SBPlayerAtPoint(w, pt, NULL, &video);
+    if (!p || !video) return NO;
+    [self linkAppDoubleTapsFrom:hit]; // gestes de Twitch sous le doigt, pour le bouton Chat
     return YES;
+}
+
+- (void)swallowedTapEnded:(UITouch *)t window:(UIWindow *)w {
+    CGPoint pt = [t locationInView:w];
+    UIView *video = nil;
+    id p = SBPlayerAtPoint(w, pt, NULL, &video);
+    if (!p || !video) return;
+    int side = SBSide(pt, video);
+    SBLogOnce(@"swallow", @"Double appui intercepté avant Twitch (le chat ne s'ouvre plus par double appui)");
+    if (side != 0) [self seekSide:side player:p video:video];
 }
 
 #pragma mark Double appui de Twitch (chat par-dessus la vidéo)
 
 - (BOOL)isOurs:(UIGestureRecognizer *)g {
-    return g.delegate == (id)self || [_seekGRs containsObject:g];
+    return g.delegate == (id)self;
 }
 
-/// Le double appui de Twitch attend que le nôtre échoue : sur les côtés, seul le recul / l'avance a lieu.
+/// Geste à plusieurs touchers de Twitch posé sur la vidéo : mémorisé pour le bouton « Chat ».
 - (void)linkAppDoubleTap:(UITapGestureRecognizer *)t {
     if (!_appDoubleTaps) _appDoubleTaps = [NSHashTable weakObjectsHashTable];
     if ([_appDoubleTaps containsObject:t]) return;
     [_appDoubleTaps addObject:t];
-    for (UIGestureRecognizer *mine in _seekGRs.allObjects) {
-        if (mine.view == t.view.window) [t requireGestureRecognizerToFail:mine];
-    }
-    t.enabled = NO; // le chat par-dessus ne s'ouvre plus qu'avec le bouton « Chat »
     SBLogOnce([@"dt-" stringByAppendingString:NSStringFromClass(t.view.class)],
               [NSString stringWithFormat:@"Double appui de l'app repéré sur %@", NSStringFromClass(t.view.class)]);
 }
@@ -525,7 +519,7 @@ static UIWindowScene *SBScene(void) {
 - (void)linkAppDoubleTapsFrom:(UIView *)hit {
     for (UIView *v = hit; v && ![v isKindOfClass:UIWindow.class]; v = v.superview) {
         for (UIGestureRecognizer *g in v.gestureRecognizers) {
-            if ([g isKindOfClass:UITapGestureRecognizer.class] && ((UITapGestureRecognizer *)g).numberOfTapsRequired == 2 && ![self isOurs:g])
+            if ([g isKindOfClass:UITapGestureRecognizer.class] && ((UITapGestureRecognizer *)g).numberOfTapsRequired >= 2 && ![self isOurs:g])
                 [self linkAppDoubleTap:(UITapGestureRecognizer *)g];
         }
     }
@@ -535,7 +529,7 @@ static UIWindowScene *SBScene(void) {
 - (void)scanView:(UIView *)v window:(UIWindow *)w depth:(int)depth {
     if (depth > 60 || v.hidden) return;
     for (UIGestureRecognizer *g in v.gestureRecognizers) {
-        if (![g isKindOfClass:UITapGestureRecognizer.class] || ((UITapGestureRecognizer *)g).numberOfTapsRequired != 2 || [self isOurs:g]) continue;
+        if (![g isKindOfClass:UITapGestureRecognizer.class] || ((UITapGestureRecognizer *)g).numberOfTapsRequired < 2 || [self isOurs:g]) continue;
         if ([_appDoubleTaps containsObject:g]) continue;
         if (v.bounds.size.width >= w.bounds.size.width * 0.4 && SBPlayerInView(v, 0)) [self linkAppDoubleTap:(UITapGestureRecognizer *)g];
     }
@@ -564,7 +558,6 @@ static UIWindowScene *SBScene(void) {
     UITapGestureRecognizer *t = [self visibleAppDoubleTap];
     if (!t) { SBLog(@"Chat : aucun double appui de l'app trouvé"); return; }
     _probeFired = NO;
-    t.enabled = YES; // réactivé le temps du déclenchement
     [t addTarget:self action:@selector(probe:)];
     @try { t.state = UIGestureRecognizerStateEnded; } @catch (NSException *e) {}
     [t removeTarget:self action:@selector(probe:)];
@@ -589,7 +582,6 @@ static UIWindowScene *SBScene(void) {
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         @try { if (t.state != UIGestureRecognizerStatePossible) [t reset]; } @catch (NSException *e) {}
-        t.enabled = NO;
     });
 }
 
@@ -635,12 +627,7 @@ static UIWindowScene *SBScene(void) {
 
 #pragma mark Double appui sur les côtés : reculer / avancer
 
-- (void)doubleTap:(UITapGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateEnded) return;
-    id p = nil;
-    UIView *video = nil;
-    int side = [self sideAt:g player:&p video:&video];
-    if (side == 0) return; // milieu : Twitch garde son double appui (chat)
+- (void)seekSide:(int)side player:(id)p video:(UIView *)video {
     CGRect r = [video convertRect:video.bounds toView:nil];
     double sign = side;
     BOOL viaMemory = !SBCanSeek(p) && SBIsLive(p);
@@ -813,7 +800,33 @@ static UIWindowScene *SBScene(void) {
 
 @end
 
+static NSHashTable *SBSwallowed;
+
+static void SBHookSendEvent(void) {
+    Method m = class_getInstanceMethod(UIWindow.class, @selector(sendEvent:));
+    if (!m) return;
+    SBSwallowed = [NSHashTable weakObjectsHashTable];
+    void (*orig)(id, SEL, UIEvent *) = (void *)method_getImplementation(m);
+    method_setImplementation(m, imp_implementationWithBlock(^(UIWindow *w, UIEvent *e) {
+        if (e.type == UIEventTypeTouches && ![w isKindOfClass:SBWindow.class]) {
+            NSSet<UITouch *> *touches = e.allTouches;
+            if (touches.count == 1) {
+                UITouch *t = touches.anyObject;
+                if (t.phase == UITouchPhaseBegan && t.tapCount >= 2 && [SBCore.shared shouldSwallow:t window:w])
+                    [SBSwallowed addObject:t];
+                if ([SBSwallowed containsObject:t]) {
+                    if (t.phase == UITouchPhaseEnded) [SBCore.shared swallowedTapEnded:t window:w];
+                    if (t.phase == UITouchPhaseEnded || t.phase == UITouchPhaseCancelled) [SBSwallowed removeObject:t];
+                    return; // pas transmis à l'app
+                }
+            }
+        }
+        orig(w, @selector(sendEvent:), e);
+    }));
+}
+
 __attribute__((constructor)) static void SBInit(void) {
+    SBHookSendEvent();
     SBHookPlay(AVPlayer.class);
     SBHookPlay(SBIVS());
     dispatch_async(dispatch_get_main_queue(), ^{
