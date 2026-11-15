@@ -19,4 +19,6 @@ NSString *SBPlayerManifest(id player); // contenu de liste de lecture donné dir
 - (double)seekBy:(double)delta inView:(UIView *)videoView;
 /// Arrête la relecture et remet le son du direct.
 - (void)stopReplay;
+/// Lecteur de relecture du tweak (à ne pas compter parmi les lecteurs de Twitch).
+- (BOOL)isReplayPlayer:(id)player;
 @end

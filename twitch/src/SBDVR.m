@@ -316,6 +316,10 @@ static NSDictionary *SBAttrs(NSString *line) {
     }
 }
 
+- (BOOL)isReplayPlayer:(id)player {
+    return player && player == _replay;
+}
+
 - (void)stopReplay {
     if (!_replay) return;
     if (_endObserver) [NSNotificationCenter.defaultCenter removeObserver:_endObserver];

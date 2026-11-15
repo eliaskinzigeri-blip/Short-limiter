@@ -315,7 +315,7 @@ static NSHashTable *SBPlayers;
 static __weak id SBLastPlayer;
 
 static void SBTrack(id p) {
-    if (!SBIsPlayer(p)) return;
+    if (!SBIsPlayer(p) || [SBDVR.shared isReplayPlayer:p]) return;
     if (!SBPlayers) SBPlayers = [NSHashTable weakObjectsHashTable];
     [SBPlayers addObject:p];
     SBLastPlayer = p;
@@ -769,6 +769,26 @@ static int SBSide(CGPoint pt, UIView *video) {
     _liveButton.hidden = YES;
 }
 
+/// Surface à l'écran de la vidéo d'un lecteur (vues IVSPlayerView / calques qui l'affichent), 0 si invisible.
+- (CGFloat)screenAreaOfPlayer:(id)p {
+    CGFloat best = 0;
+    for (UIWindow *w in [self appWindows]) {
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+        while (stack.count) {
+            UIView *v = stack.lastObject;
+            [stack removeLastObject];
+            if (v.hidden || v.alpha < 0.01) continue;
+            if ([v respondsToSelector:@selector(player)] && ((id (*)(id, SEL))objc_msgSend)(v, @selector(player)) == p) {
+                CGRect r = CGRectIntersection([v convertRect:v.bounds toView:nil], w.bounds);
+                if (!CGRectIsNull(r)) best = MAX(best, r.size.width * r.size.height);
+                continue;
+            }
+            [stack addObjectsFromArray:v.subviews];
+        }
+    }
+    return best;
+}
+
 - (void)tick {
     BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
     [self installGestures];
@@ -781,10 +801,15 @@ static int SBSide(CGPoint pt, UIView *video) {
     id best = nil;
     double bestLatency = -1;
     if (active) {
+        // Direct principal : celui dont la vidéo est la plus grande à l'écran (pas les aperçus du fil)
+        CGFloat bestArea = 0;
         for (id p in SBPlayers.allObjects) {
-            if (!SBIsLive(p) || !SBIsPlaying(p)) continue;
-            double lat = SBLatency(p);
-            if (lat > bestLatency) { best = p; bestLatency = lat; }
+            if (!SBIsLive(p) || !SBIsPlaying(p) || [SBDVR.shared isReplayPlayer:p]) continue;
+            CGFloat area = [self screenAreaOfPlayer:p];
+            if (area < bestArea) continue;
+            bestArea = area;
+            best = p;
+            bestLatency = SBLatency(p);
         }
     }
     _livePlayer = best;

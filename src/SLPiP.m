@@ -161,6 +161,22 @@ void SLPiPWatchdog(void) {
     if (!av.pictureInPictureActive) return;
     AVSampleBufferDisplayLayer *l = SLFindSBDL(SLPiPRenderView.layer, 0);
     if (!l) { [SLCore.shared logOnce:@"pip-nolayer" text:@"PiP : calque vidéo introuvable"]; return; }
+    // Relevé détaillé toutes les 5 s pendant le PiP (premier plan comme arrière-plan)
+    static NSDate *lastReport;
+    if (!lastReport || -lastReport.timeIntervalSinceNow >= 5) {
+        lastReport = NSDate.date;
+        NSString *same = @"?";
+        if (@available(iOS 15.0, *)) {
+            AVSampleBufferDisplayLayer *pipLayer = av.contentSource.sampleBufferDisplayLayer;
+            same = pipLayer ? (pipLayer == l ? @"oui" : [NSString stringWithFormat:@"non (%@)", NSStringFromClass(pipLayer.superlayer.delegate.class)]) : @"pas de calque (lecteur Apple)";
+        }
+        UIApplicationState st = UIApplication.sharedApplication.applicationState;
+        double rate = l.controlTimebase ? CMTimebaseGetRate(l.controlTimebase) : -1;
+        [SLCore.shared log:[NSString stringWithFormat:@"PiP relevé : app %@, calque état %ld%@, prêt %@, vitesse %.1f, calque du PiP = calque vidéo : %@",
+                            st == UIApplicationStateActive ? @"active" : (st == UIApplicationStateBackground ? @"arrière-plan" : @"inactive"),
+                            (long)l.status, l.error ? [NSString stringWithFormat:@" (erreur %ld)", (long)l.error.code] : @"",
+                            l.isReadyForMoreMediaData ? @"oui" : @"non", rate, same]];
+    }
     BOOL failed = l.status == AVQueuedSampleBufferRenderingStatusFailed;
     BOOL needsFlush = [l respondsToSelector:@selector(requiresFlushToResumeDecoding)] && l.requiresFlushToResumeDecoding;
     BOOL background = UIApplication.sharedApplication.applicationState == UIApplicationStateBackground;
