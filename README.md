@@ -33,9 +33,14 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
    crée un dossier dédié.
 4. Onglet des apps : appui long sur ton app YouTube → réglages de l'app → **Dossier de tweaks** : choisis le dossier
    qui contient `ShortLimiter.dylib`.
-5. Lance YouTube : un appui long à trois doigts ouvre les réglages de ShortLimiter.
+5. Toujours dans l'onglet **Tweaks**, touche le bouton **signature** (à gauche du +) : il signe le tweak avec le
+   certificat de LiveContainer. Sans ça, YouTube affiche « Failed to load tweaks … code signature invalid ».
+   Si la signature échoue, importe d'abord le certificat de SideStore dans les **Paramètres** de LiveContainer.
+6. Lance YouTube **depuis LiveContainer** : le bandeau « ShortLimiter actif » s'affiche au lancement, et un appui
+   long à trois doigts ouvre les réglages.
 
-Pour mettre à jour : remplace le fichier par la nouvelle version (même lien), puis relance YouTube.
+Pour mettre à jour : remplace le fichier par la nouvelle version (même lien), retouche le bouton **signature**,
+puis relance YouTube.
 
 ## Ajuster la détection après un premier essai
 
