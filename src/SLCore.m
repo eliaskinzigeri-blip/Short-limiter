@@ -711,5 +711,6 @@ static NSDate *SLNextMidnight(void) {
 __attribute__((constructor)) static void SLInit(void) {
     SLInstallYouTubeSettings();
     SLInstallPiPFixes();
+    SLInstallPiPCompat();
     dispatch_async(dispatch_get_main_queue(), ^{ [[SLCore shared] start]; });
 }

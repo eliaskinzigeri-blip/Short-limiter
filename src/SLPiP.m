@@ -8,13 +8,14 @@
 static NSString *const SLPiPKey = @"ShortLimiter.pipCompat";
 
 BOOL SLPiPCompatEnabled(void) {
-    // Désactivé : le rendu 2 (Metal) empêche le PiP d'Apple (« possible : non » dans le journal). Code gardé pour essais.
-    return NO;
+    // Rendu 3 (ancien calque à images). Le 2 (Metal) empêchait le PiP ; le 6 (par défaut) reste bloqué (« prêt non »).
+    NSNumber *v = [NSUserDefaults.standardUserDefaults objectForKey:SLPiPKey];
+    return v ? v.boolValue : YES;
 }
 
 void SLSetPiPCompatEnabled(BOOL on) {
     [NSUserDefaults.standardUserDefaults setBool:on forKey:SLPiPKey];
-    [SLCore.shared log:[NSString stringWithFormat:@"PiP : mode compatibilité %@ (relancer YouTube)", on ? @"activé" : @"désactivé"]];
+    [SLCore.shared log:[NSString stringWithFormat:@"PiP : rendu alternatif %@ (relancer YouTube)", on ? @"activé" : @"désactivé"]];
 }
 
 static void SLHookRenderViewType(NSString *className) {
@@ -31,10 +32,10 @@ static void SLHookRenderViewType(NSString *className) {
         if (!logged) {
             logged = YES;
             dispatch_async(dispatch_get_main_queue(), ^{
-                [SLCore.shared log:[NSString stringWithFormat:@"PiP : rendu %d → 2 (%@)", value, className]];
+                [SLCore.shared log:[NSString stringWithFormat:@"PiP : rendu %d → 3 (%@)", value, className]];
             });
         }
-        return 2;
+        return 3; // HAMPLAYER_RENDER_VIEW_TYPE_SBDL
     }));
 }
 
