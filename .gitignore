@@ -1,0 +1,5 @@
+out/
+build.log
+*.ipa
+.env
+.DS_Store

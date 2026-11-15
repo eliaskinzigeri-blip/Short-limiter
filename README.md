@@ -1,0 +1,56 @@
+# ShortLimiter
+
+Tweak iOS (bibliothèque `.dylib` en Objective-C) qui limite le temps passé sur les **Shorts** dans l'app YouTube,
+chargé par la fonction **Tweaks** de LiveContainer. Il ne fait que gérer le temps des Shorts : pas de blocage de
+publicités, pas de fonction payante débloquée.
+
+Ce dépôt ne contient que le code original du tweak et ses versions compilées. **Aucune app YouTube (IPA) n'y est
+téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
+
+## Fonctions
+
+- **Détection des Shorts** à l'exécution : chaque seconde, le tweak parcourt les contrôleurs de vue affichés et
+  reconnaît un écran Shorts quand le nom de sa classe contient un des « noms recherchés » (par défaut `Reel`, `Shorts`),
+  sans contenir un « nom exclu » (`Shelf`, `Thumbnail`, `Cell`…), et qu'il occupe au moins la moitié de l'écran.
+- **Compteur** : seulement quand YouTube est au premier plan et qu'un Short est affiché. Petit compteur en haut de
+  l'écran (désactivable).
+- **Limite** réglable (5 min par défaut) puis **blocage** pendant un délai réglable (30 min par défaut) : un écran
+  par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
+  arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de
+  YouTube (vidéos, recherche, abonnements) reste utilisable.
+- **Réglages et statistiques du jour** (temps, ouvertures, blocages, jours précédents) : **appui long à trois doigts**
+  n'importe où, ou toucher le compteur. Tout est enregistré (NSUserDefaults) et survit à la fermeture de l'app.
+- **Journal** : `Documents/ShortLimiter-journal.txt` de l'app, aussi visible et partageable depuis les réglages
+  (« Voir le journal »). Il liste les écrans vus (nom de classe et part de l'écran) pour ajuster la détection.
+
+## Installation
+
+1. Sur l'iPhone, télécharge la dernière version :
+   https://github.com/eliaskinzigeri-blip/short-limiter/releases/download/latest/ShortLimiter.dylib
+   (enregistre-la dans Fichiers).
+2. Ouvre SideStore, onglet **My Apps**, puis le bouton en haut qui ouvre l'interface **LiveContainer**.
+3. Onglet **Tweaks** : ajoute `ShortLimiter.dylib` (bouton +, depuis Fichiers). Si tu le ranges dans un dossier,
+   crée un dossier dédié.
+4. Onglet des apps : appui long sur ton app YouTube → réglages de l'app → **Dossier de tweaks** : choisis le dossier
+   qui contient `ShortLimiter.dylib`.
+5. Lance YouTube : un appui long à trois doigts ouvre les réglages de ShortLimiter.
+
+Pour mettre à jour : remplace le fichier par la nouvelle version (même lien), puis relance YouTube.
+
+## Ajuster la détection après un premier essai
+
+La détection est faite sans le code de YouTube : elle peut ne pas marcher du premier coup, et une mise à jour de
+YouTube peut la casser.
+
+1. Ouvre un Short, reste quelques secondes, puis reviens à l'accueil.
+2. Appui long à trois doigts → **Voir le journal**. Repère les lignes `Écran vu : …` apparues quand le Short
+   était affiché, et la ligne `Shorts : OUI (…)` si la détection a marché.
+3. Si rien ne correspond, ajoute un morceau du nom de classe de l'écran Shorts dans **Noms recherchés** ; si un autre
+   écran est pris pour un Short, ajoute un morceau de son nom dans **Noms exclus**.
+4. **Barre d'onglets** : morceau du nom des vues des onglets du bas (par défaut `PivotBarItem`), utilisé pour
+   revenir à l'accueil pendant le blocage.
+
+## Compilation
+
+GitHub Actions (`.github/workflows/build.yml`) compile `src/*.m` avec clang et le SDK iOS sur un runner macOS (arm64,
+iOS 15 minimum), signe le `.dylib` en ad hoc et le publie dans la version `latest` et une version `v1.0.N`.
