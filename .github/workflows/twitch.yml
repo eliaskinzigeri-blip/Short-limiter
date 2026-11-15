@@ -1,0 +1,51 @@
+# Compile le tweak StreamBoost.dylib (pour l'app Twitch, arm64) avec clang et le SDK iOS d'un runner macOS.
+# Publie le .dylib dans la version « twitch-latest » (lien fixe) et une version numérotée twitch-v1.0.N.
+# Le dépôt et ses versions ne contiennent que ce tweak : aucune app Twitch n'est téléchargée ni publiée.
+name: Tweak Twitch
+
+on:
+  push:
+    branches: [main]
+    paths: ["twitch/**", ".github/workflows/twitch.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: twitch-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilation
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p out
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=15.0 \
+            -dynamiclib -fobjc-arc -fmodules -O2 -Wall -Wno-deprecated-declarations \
+            -DSB_VERSION="\"1.0.$RUN\"" \
+            -framework Foundation -framework UIKit -framework AVFoundation -framework CoreMedia \
+            -install_name @rpath/StreamBoost.dylib \
+            -o out/StreamBoost.dylib twitch/src/*.m 2>&1 | tee build.log
+          codesign -f -s - out/StreamBoost.dylib
+          file out/StreamBoost.dylib
+
+      - name: Publication (version « twitch-latest » et version numérotée)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_number }}
+        run: |
+          NOTES="Tweak StreamBoost 1.0.$RUN (${GITHUB_SHA::7}) pour l'app Twitch. À ajouter dans l'onglet Tweaks de LiveContainer, puis bouton signature. Voir twitch/README.md."
+          gh release delete twitch-latest --yes --cleanup-tag || true
+          gh release create twitch-latest out/StreamBoost.dylib --target "$GITHUB_SHA" --title "StreamBoost pour Twitch (dernière version)" --notes "$NOTES" --latest=false
+          gh release create "twitch-v1.0.$RUN" out/StreamBoost.dylib --target "$GITHUB_SHA" \
+            --title "StreamBoost 1.0.$RUN" --notes "$NOTES" --latest=false
