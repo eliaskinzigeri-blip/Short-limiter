@@ -18,8 +18,9 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de
   YouTube (vidéos, recherche, abonnements) reste utilisable.
-- **Réglages et statistiques du jour** (temps, ouvertures, blocages, jours précédents) : **appui long à trois doigts**
-  n'importe où, ou toucher le compteur. Tout est enregistré (NSUserDefaults) et survit à la fermeture de l'app.
+- **Réglages et statistiques du jour** : rubrique **Shorts Limiter** (logo Shorts) dans les **Paramètres de YouTube**,
+  avec les cellules et sélecteurs de YouTube (limite, durée de pause, compteur). Historique et détection avancée :
+  dernière ligne de la rubrique, appui long à trois doigts n'importe où, ou toucher le compteur. Tout est enregistré (NSUserDefaults) et survit à la fermeture de l'app.
 - **Journal** : `Documents/ShortLimiter-journal.txt` de l'app, aussi visible et partageable depuis les réglages
   (« Voir le journal »). Il liste les écrans vus (nom de classe et part de l'écran) pour ajuster la détection.
 

@@ -28,6 +28,8 @@
 @property (nonatomic, readonly) BOOL isBlocked;
 @property (nonatomic, readonly) double remainingBlock;   // secondes
 @property (nonatomic, readonly) double remainingBeforeBlock;
+@property (nonatomic, readonly) double blockDuration;    // durée totale du blocage en cours
+- (CGFloat)tabBarInset;    // hauteur de la barre d'onglets du bas de l'app (bord inférieur compris)
 @property (nonatomic, readonly) NSString *matchedName;   // classe reconnue comme écran Shorts
 @property (nonatomic, readonly) NSDictionary *today;     // day, seconds, entries, blocks
 @property (nonatomic, readonly) NSArray<NSDictionary *> *history; // 7 jours précédents
@@ -58,4 +60,5 @@
 @end
 
 NSString *SLFormat(double seconds);
+void SLInstallYouTubeSettings(void); // rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);

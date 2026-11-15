@@ -41,7 +41,8 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Limite des Shorts";
+    self.title = @"Shorts Limiter";
+    self.tableView.backgroundColor = [UIColor colorWithRed:15 / 255.0 green:15 / 255.0 blue:15 / 255.0 alpha:1];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                            target:self action:@selector(close)];
 }

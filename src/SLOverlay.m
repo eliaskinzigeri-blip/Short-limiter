@@ -1,5 +1,73 @@
 #import "SL.h"
 
+static UIColor *SLColor(unsigned rgb) {
+    return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0 green:((rgb >> 8) & 0xFF) / 255.0 blue:(rgb & 0xFF) / 255.0 alpha:1];
+}
+
+/// Bouton arrondi façon YouTube.
+static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:fg forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    b.backgroundColor = bg;
+    b.layer.cornerRadius = 22;
+    [b.heightAnchor constraintEqualToConstant:44].active = YES;
+    return b;
+}
+
+/// Étiquette avec marges intérieures (pastille des statistiques).
+@interface SLInsetLabel : UILabel
+@end
+
+@implementation SLInsetLabel
+- (void)drawTextInRect:(CGRect)rect { [super drawTextInRect:UIEdgeInsetsInsetRect(rect, UIEdgeInsetsMake(0, 14, 0, 14))]; }
+- (CGSize)intrinsicContentSize {
+    CGSize s = [super intrinsicContentSize];
+    return CGSizeMake(s.width + 28, MAX(28, s.height + 10));
+}
+@end
+
+/// Anneau du compte à rebours : la part rouge diminue jusqu'à la fin du blocage.
+@interface SLRingView : UIView
+@property (nonatomic) double progress;
+@end
+
+@implementation SLRingView {
+    CAShapeLayer *_track, *_bar;
+}
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        _track = [CAShapeLayer layer];
+        _bar = [CAShapeLayer layer];
+        for (CAShapeLayer *l in @[_track, _bar]) {
+            l.fillColor = UIColor.clearColor.CGColor;
+            l.lineWidth = 8;
+            l.lineCap = kCALineCapRound;
+            [self.layer addSublayer:l];
+        }
+        _track.strokeColor = SLColor(0x3F3F3F).CGColor;
+        _bar.strokeColor = SLColor(0xFF0033).CGColor;
+    }
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat r = MIN(self.bounds.size.width, self.bounds.size.height) / 2 - 6;
+    CGPoint c = CGPointMake(CGRectGetMidX(self.bounds), CGRectGetMidY(self.bounds));
+    UIBezierPath *path = [UIBezierPath bezierPathWithArcCenter:c radius:r startAngle:-M_PI_2 endAngle:3 * M_PI_2 clockwise:YES];
+    _track.path = path.CGPath;
+    _bar.path = path.CGPath;
+}
+- (void)setProgress:(double)progress {
+    _progress = MAX(0, MIN(1, progress));
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _bar.strokeEnd = _progress;
+    [CATransaction commit];
+}
+@end
+
 /// Fenêtre transparente au-dessus de l'app : seuls ses éléments visibles captent les touchers.
 @interface SLOverlayWindow : UIWindow
 @end
@@ -33,6 +101,9 @@
     UIView *_panel;
     UILabel *_countdown;
     UILabel *_detail;
+    UILabel *_stats;
+    SLRingView *_ring;
+    NSLayoutConstraint *_panelBottom;
     BOOL _settingsOpen;
     UILabel *_toast;
     NSDate *_toastUntil;
@@ -69,54 +140,74 @@
     [_pill addTarget:self action:@selector(presentSettings) forControlEvents:UIControlEventTouchUpInside];
     [root addSubview:_pill];
 
-    // Écran de blocage : couvre tout sauf la barre d'onglets du bas, pour pouvoir aller ailleurs dans YouTube
+    // Écran de blocage, style sombre de YouTube : couvre l'écran jusqu'à la barre d'onglets du bas,
+    // qui reste utilisable pour aller ailleurs dans YouTube
     _panel = [UIView new];
     _panel.translatesAutoresizingMaskIntoConstraints = NO;
-    _panel.backgroundColor = [UIColor colorWithRed:0.08 green:0.06 blue:0.20 alpha:0.97];
+    _panel.backgroundColor = SLColor(0x0F0F0F);
     [root addSubview:_panel];
 
-    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"hourglass"]];
-    icon.tintColor = [UIColor colorWithRed:1 green:0.69 blue:0.25 alpha:1];
-    icon.contentMode = UIViewContentModeScaleAspectFit;
-    [icon.heightAnchor constraintEqualToConstant:56].active = YES;
+    _ring = [SLRingView new];
+    _ring.translatesAutoresizingMaskIntoConstraints = NO;
+    [_ring.widthAnchor constraintEqualToConstant:196].active = YES;
+    [_ring.heightAnchor constraintEqualToConstant:196].active = YES;
+
+    UIImageView *glass = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"hourglass"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]]];
+    glass.tintColor = SLColor(0xAAAAAA);
+    _countdown = [UILabel new];
+    _countdown.font = [UIFont monospacedDigitSystemFontOfSize:42 weight:UIFontWeightBold];
+    _countdown.textColor = UIColor.whiteColor;
+    UILabel *left = [UILabel new];
+    left.text = @"restantes";
+    left.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    left.textColor = SLColor(0xAAAAAA);
+    UIStackView *inner = [[UIStackView alloc] initWithArrangedSubviews:@[glass, _countdown, left]];
+    inner.axis = UILayoutConstraintAxisVertical;
+    inner.alignment = UIStackViewAlignmentCenter;
+    inner.spacing = 2;
+    inner.translatesAutoresizingMaskIntoConstraints = NO;
+    [_ring addSubview:inner];
+    [inner.centerXAnchor constraintEqualToAnchor:_ring.centerXAnchor].active = YES;
+    [inner.centerYAnchor constraintEqualToAnchor:_ring.centerYAnchor].active = YES;
 
     UILabel *title = [UILabel new];
-    title.text = @"Temps de Shorts écoulé";
-    title.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
+    title.text = @"Pause Shorts";
+    title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
     title.textColor = UIColor.whiteColor;
     title.textAlignment = NSTextAlignmentCenter;
 
-    _countdown = [UILabel new];
-    _countdown.font = [UIFont monospacedDigitSystemFontOfSize:56 weight:UIFontWeightHeavy];
-    _countdown.textColor = UIColor.whiteColor;
-    _countdown.textAlignment = NSTextAlignmentCenter;
-
     _detail = [UILabel new];
     _detail.font = [UIFont systemFontOfSize:15];
-    _detail.textColor = [UIColor colorWithWhite:1 alpha:0.75];
+    _detail.textColor = SLColor(0xAAAAAA);
     _detail.textAlignment = NSTextAlignmentCenter;
     _detail.numberOfLines = 0;
 
-    UIButton *home = [UIButton buttonWithType:UIButtonTypeSystem];
-    [home setTitle:@"Retour à l'accueil" forState:UIControlStateNormal];
-    home.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    home.backgroundColor = UIColor.whiteColor;
-    home.tintColor = [UIColor colorWithRed:0.08 green:0.06 blue:0.20 alpha:1];
-    home.layer.cornerRadius = 12;
-    [home.heightAnchor constraintEqualToConstant:50].active = YES;
-    [home addTarget:self action:@selector(goHome) forControlEvents:UIControlEventTouchUpInside];
+    _stats = [SLInsetLabel new];
+    _stats.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    _stats.textColor = UIColor.whiteColor;
+    _stats.backgroundColor = SLColor(0x272727);
+    _stats.layer.cornerRadius = 14;
+    _stats.clipsToBounds = YES;
+    _stats.textAlignment = NSTextAlignmentCenter;
 
-    UIButton *settings = [UIButton buttonWithType:UIButtonTypeSystem];
-    [settings setTitle:@"Réglages et statistiques" forState:UIControlStateNormal];
-    settings.tintColor = [UIColor colorWithWhite:1 alpha:0.8];
+    UIButton *home = SLPillButton(@"Retour à l'accueil", UIColor.whiteColor, SLColor(0x0F0F0F));
+    [home addTarget:self action:@selector(goHome) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *settings = SLPillButton(@"Paramètres de Shorts Limiter", SLColor(0x272727), UIColor.whiteColor);
     [settings addTarget:self action:@selector(presentSettings) forControlEvents:UIControlEventTouchUpInside];
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[icon, title, _countdown, _detail, home, settings]];
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_ring, title, _detail, _stats, home, settings]];
     stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 14;
+    stack.alignment = UIStackViewAlignmentCenter;
+    stack.spacing = 12;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [stack setCustomSpacing:28 afterView:_detail];
+    [stack setCustomSpacing:24 afterView:_ring];
+    [stack setCustomSpacing:6 afterView:title];
+    [stack setCustomSpacing:28 afterView:_stats];
     [_panel addSubview:stack];
+    [home.widthAnchor constraintEqualToConstant:260].active = YES;
+    [settings.widthAnchor constraintEqualToConstant:260].active = YES;
+    [_detail.widthAnchor constraintLessThanOrEqualToConstant:320].active = YES;
 
     // Message bref (ex. confirmation au lancement)
     _toast = [UILabel new];
@@ -145,12 +236,12 @@
         [_panel.topAnchor constraintEqualToAnchor:root.topAnchor],
         [_panel.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
         [_panel.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
-        [_panel.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-56],
-
         [stack.centerYAnchor constraintEqualToAnchor:_panel.centerYAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor constant:32],
-        [stack.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor constant:-32],
+        [stack.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor constant:24],
+        [stack.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor constant:-24],
     ]];
+    _panelBottom = [_panel.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-90];
+    _panelBottom.active = YES;
 }
 
 - (void)goHome {
@@ -178,9 +269,14 @@
         }];
     }
     if (block) {
+        _panelBottom.constant = -[c tabBarInset];
         _countdown.text = SLFormat(c.remainingBlock);
-        _detail.text = [NSString stringWithFormat:@"Les Shorts sont bloqués encore %@.\nAujourd'hui : %@ de Shorts.\nLe reste de YouTube reste disponible.",
-                        SLFormat(c.remainingBlock), SLFormat([c.today[@"seconds"] doubleValue])];
+        _ring.progress = c.blockDuration > 0 ? c.remainingBlock / c.blockDuration : 0;
+        _detail.text = [NSString stringWithFormat:@"Tu as atteint ta limite de %ld min de Shorts. Ils reviennent à la fin du compte à rebours ; le reste de YouTube reste disponible.",
+                        (long)c.limitMinutes];
+        long blocks = [c.today[@"blocks"] longValue];
+        _stats.text = [NSString stringWithFormat:@"Aujourd'hui · %@ de Shorts · %ld pause%@",
+                       SLFormat([c.today[@"seconds"] doubleValue]), blocks, blocks > 1 ? @"s" : @""];
     }
     _window.hidden = NO;
 }
@@ -206,6 +302,7 @@
     s.onClose = ^{ [weakSelf settingsClosed]; };
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:s];
     nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark; // même thème que YouTube
     nav.presentationController.delegate = s; // fermeture par glissement
     [_window.rootViewController presentViewController:nav animated:YES completion:nil];
 }

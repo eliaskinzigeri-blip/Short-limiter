@@ -138,6 +138,29 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 - (BOOL)isBlocked { return _blockedUntil && _blockedUntil.timeIntervalSinceNow > 0; }
 - (double)remainingBlock { return self.isBlocked ? _blockedUntil.timeIntervalSinceNow : 0; }
+- (double)blockDuration {
+    double start = [_d doubleForKey:SLKey("blockStart")];
+    if (!_blockedUntil || start <= 0) return _blockMinutes * 60.0;
+    return MAX(1, _blockedUntil.timeIntervalSince1970 - start);
+}
+
+- (CGFloat)tabBarInset {
+    for (UIWindow *w in [self appWindows]) {
+        NSMutableArray<UIView *> *bars = [NSMutableArray array];
+        [self collect:w names:@[@"pivotbar"] into:bars depth:0];
+        CGFloat best = 0;
+        for (UIView *v in bars) {
+            if ([NSStringFromClass(v.class).lowercaseString containsString:@"item"] || ![self isVisible:v inWindow:w]) continue;
+            CGRect r = [v convertRect:v.bounds toView:nil];
+            if (r.size.width < w.bounds.size.width * 0.8 || CGRectGetMinY(r) < w.bounds.size.height * 0.6) continue;
+            best = MAX(best, w.bounds.size.height - CGRectGetMinY(r));
+        }
+        if (best > 0) return best;
+        return w.safeAreaInsets.bottom + 56;
+    }
+    return 90;
+}
+
 - (double)remainingBeforeBlock { return MAX(0, _limitMinutes * 60.0 - _usedSeconds); }
 - (NSDictionary *)today { return [_today copy]; }
 - (NSArray<NSDictionary *> *)history { return [_history copy]; }
@@ -169,6 +192,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 - (void)start {
     if (_timer) return;
+    SLInstallYouTubeSettings(); // au cas où les classes n'étaient pas encore là au chargement
     [self log:[NSString stringWithFormat:@"ShortLimiter %s chargé dans %@ (%@)", SL_VERSION,
                NSBundle.mainBundle.bundleIdentifier,
                [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]];
@@ -216,6 +240,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
         [self bump:@"seconds" by:dt];
         if (_usedSeconds >= _limitMinutes * 60.0) {
             _blockedUntil = [now dateByAddingTimeInterval:_blockMinutes * 60.0];
+            [_d setDouble:now.timeIntervalSince1970 forKey:SLKey("blockStart")];
             _usedSeconds = 0;
             [self bump:@"blocks" by:1];
             [self log:[NSString stringWithFormat:@"Limite atteinte : Shorts bloqués %ld min", (long)_blockMinutes]];
@@ -492,5 +517,6 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 @end
 
 __attribute__((constructor)) static void SLInit(void) {
+    SLInstallYouTubeSettings();
     dispatch_async(dispatch_get_main_queue(), ^{ [[SLCore shared] start]; });
 }
