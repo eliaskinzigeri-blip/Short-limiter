@@ -74,13 +74,5 @@
 NSString *SLFormat(double seconds);
 NSString *SLDayName(NSInteger day); // 0 = tous les jours, 1 = lundi … 7 = dimanche
 void SLInstallYouTubeSettings(void);
-void SLInstallPiPCompat(void);       // PiP noir : rendu vidéo classique
-BOOL SLPiPCompatEnabled(void);
-void SLSetPiPCompatEnabled(BOOL on);
-UIViewController *SLVisiblePlayerVC(void); // lecteur vidéo de YouTube affiché
-BOOL SLPiPAllowed(UIViewController *playerVC);  // YouTube autorise le PiP sur ce compte
-void SLStartPiP(UIViewController *playerVC);
-void SLPiPWatchdog(void);     // PiP noir : remet à zéro le calque vidéo en échec
-void SLInstallPiPFixes(void);
 void SLDecorateSettings(void);     // icône barrée de la rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);

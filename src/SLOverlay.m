@@ -107,9 +107,6 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     NSLayoutConstraint *_panelBottom;
     BOOL _settingsOpen;
     UILabel *_toast;
-    UIButton *_pipButton;
-    __weak UIViewController *_pipPlayer;
-    NSLayoutConstraint *_pipX, *_pipY;
     NSDate *_toastUntil;
 }
 
@@ -227,25 +224,8 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     _toast.hidden = YES;
     [root addSubview:_toast];
 
-    // Bouton PiP sur le lecteur vidéo (le PiP automatique en quittant l'app ne part pas dans LiveContainer)
-    _pipButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _pipButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_pipButton setImage:[UIImage systemImageNamed:@"pip.enter" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]
-                forState:UIControlStateNormal];
-    _pipButton.tintColor = UIColor.whiteColor;
-    _pipButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    _pipButton.layer.cornerRadius = 18;
-    _pipButton.hidden = YES;
-    [_pipButton addTarget:self action:@selector(startPiP) forControlEvents:UIControlEventTouchUpInside];
-    [root addSubview:_pipButton];
-    _pipX = [_pipButton.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:56];
-    _pipY = [_pipButton.topAnchor constraintEqualToAnchor:root.topAnchor constant:100];
-
     UILayoutGuide *safe = root.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        _pipX, _pipY,
-        [_pipButton.widthAnchor constraintEqualToConstant:36],
-        [_pipButton.heightAnchor constraintEqualToConstant:36],
         [_pill.topAnchor constraintEqualToAnchor:safe.topAnchor constant:4],
         [_pill.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
         [_pill.heightAnchor constraintEqualToConstant:26],
@@ -270,35 +250,18 @@ static UIButton *SLPillButton(NSString *title, UIColor *bg, UIColor *fg) {
     [[SLCore shared] leaveShorts];
 }
 
-- (void)startPiP {
-    UIViewController *p = _pipPlayer;
-    if (p) SLStartPiP(p);
-}
-
 - (void)refresh {
     SLCore *c = SLCore.shared;
-    // Bouton PiP : lecteur vidéo affiché (pas un Short), PiP autorisé par YouTube
-    UIViewController *player = (!c.onShorts && !_settingsOpen && UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
-        ? SLVisiblePlayerVC() : nil;
-    BOOL pip = player && SLPiPAllowed(player);
-    _pipPlayer = pip ? player : nil;
     BOOL block = c.onShorts && c.isBlocked && !_settingsOpen;
     BOOL pill = c.onShorts && !c.isBlocked && c.showCounter && !_settingsOpen;
     BOOL toast = _toastUntil && _toastUntil.timeIntervalSinceNow > 0 && !_settingsOpen;
     _toast.hidden = !toast;
-    if (!block && !pill && !toast && !pip && !_settingsOpen) {
-        _pipButton.hidden = YES;
+    if (!block && !pill && !toast && !_settingsOpen) {
         _window.hidden = YES;
         return;
     }
     if (![self ensureWindow]) return;
     _panel.hidden = !block;
-    _pipButton.hidden = !pip;
-    if (pip) {
-        CGRect r = [player.view convertRect:player.view.bounds toView:nil];
-        _pipX.constant = CGRectGetMinX(r) + 52;
-        _pipY.constant = CGRectGetMinY(r) + 8;
-    }
     _pill.hidden = !pill;
     if (pill) {
         double today = [c.today[@"seconds"] doubleValue];
