@@ -37,8 +37,10 @@ static id SLSwitch(NSString *title, NSString *desc, BOOL on, SLSwitchBlock block
     return nil;
 }
 
-static id SLCheckmark(NSString *title, SLSelectBlock block) {
+static id SLCheckmark(NSString *title, NSString *desc, SLSelectBlock block) {
     Class C = objc_getClass("YTSettingsSectionItem");
+    SEL s2 = @selector(checkmarkItemWithTitle:titleDescription:selectBlock:);
+    if (desc && [C respondsToSelector:s2]) return ((id (*)(id, SEL, id, id, id))objc_msgSend)(C, s2, title, desc, block);
     SEL s = @selector(checkmarkItemWithTitle:selectBlock:);
     if (![C respondsToSelector:s]) return nil;
     return ((id (*)(id, SEL, id, id))objc_msgSend)(C, s, title, block);
@@ -68,9 +70,10 @@ static NSString *SLMinutes(NSInteger m) {
     return [NSString stringWithFormat:@"%ld min", (long)m];
 }
 
-/// Sélecteur de durée de YouTube (même écran que « Qualité vidéo »), poussé dans la navigation des paramètres.
-static void SLPushPicker(id manager, id settingsVC, NSString *title, NSArray<NSNumber *> *values, NSInteger current,
-                         void (^apply)(NSInteger)) {
+/// Sélecteur de YouTube (même écran que « Qualité vidéo »), poussé dans la navigation des paramètres.
+/// titles / descs : textes des lignes (nil : durées en minutes).
+static void SLPushPicker(id manager, id settingsVC, NSString *title, NSArray<NSNumber *> *values, NSArray<NSString *> *titles,
+                         NSArray<NSString *> *descs, NSInteger current, void (^apply)(NSInteger)) {
     Class P = objc_getClass("YTSettingsPickerViewController");
     SEL init = @selector(initWithNavTitle:pickerSectionTitle:rows:selectedItemIndex:parentResponder:);
     if (!P || ![P instancesRespondToSelector:init] || ![settingsVC respondsToSelector:@selector(pushViewController:)]) return;
@@ -79,7 +82,7 @@ static void SLPushPicker(id manager, id settingsVC, NSString *title, NSArray<NSN
     for (NSUInteger i = 0; i < values.count; i++) {
         NSInteger v = values[i].integerValue;
         if (v == current) selected = i;
-        id row = SLCheckmark(SLMinutes(v), ^BOOL(id cell, NSUInteger arg) {
+        id row = SLCheckmark(titles ? titles[i] : SLMinutes(v), descs ? descs[i] : nil, ^BOOL(id cell, NSUInteger arg) {
             apply(v);
             SLReload(settingsVC);
             return YES;
@@ -90,6 +93,18 @@ static void SLPushPicker(id manager, id settingsVC, NSString *title, NSArray<NSN
         ? ((id (*)(id, SEL))objc_msgSend)(manager, @selector(parentResponder)) : settingsVC;
     id picker = ((id (*)(id, SEL, id, id, id, NSUInteger, id))objc_msgSend)([P alloc], init, title, nil, rows, selected, parent);
     if (picker) ((void (*)(id, SEL, id))objc_msgSend)(settingsVC, @selector(pushViewController:), picker);
+}
+
+/// Reconstruit la rubrique (lignes et interrupteurs) après un changement de jour ou d'option.
+static void SLRebuild(id manager, id vc) {
+    SEL u = @selector(updateSectionForCategory:withEntry:);
+    if ([manager respondsToSelector:u]) ((void (*)(id, SEL, NSUInteger, id))objc_msgSend)(manager, u, (NSUInteger)SLSection, nil);
+    SLReload(vc);
+}
+
+static NSString *SLDayLabel(NSInteger day) {
+    NSString *name = SLDayName(day);
+    return day == SLCore.shared.todayWeekday ? [name stringByAppendingString:@" (aujourd'hui)"] : name;
 }
 
 static void SLBuildSection(id manager) {
@@ -116,37 +131,80 @@ static void SLBuildSection(id manager) {
         return [NSString stringWithFormat:@"%@ · %@", t[@"entries"], t[@"blocks"]];
     }, ^BOOL(id cell, NSUInteger arg) { return YES; }));
 
+    // Réglages selon le jour : les lignes de règles ci-dessous modifient le jour choisi
+    add(SLSwitch(@"Réglages selon le jour", @"Des limites différentes pour chaque jour de la semaine", c.perDayEnabled,
+                 ^BOOL(id cell, BOOL on) {
+        SLCore.shared.perDayEnabled = on;
+        dispatch_async(dispatch_get_main_queue(), ^{ SLRebuild(manager, vc); });
+        return YES;
+    }));
+
+    NSInteger d = c.perDayEnabled ? MAX(1, c.editDay) : 0;
+    if (c.perDayEnabled) {
+        NSArray *days = @[@1, @2, @3, @4, @5, @6, @7];
+        add(SLItem(@"Jour à régler", @"Les réglages ci-dessous s'appliquent à ce jour", ^NSString *{
+            return SLDayLabel(MAX(1, SLCore.shared.editDay));
+        }, ^BOOL(id cell, NSUInteger arg) {
+            NSMutableArray *titles = [NSMutableArray array], *descs = [NSMutableArray array];
+            for (NSNumber *n in days) {
+                [titles addObject:SLDayLabel(n.integerValue)];
+                [descs addObject:[SLCore.shared summaryForDay:n.integerValue]];
+            }
+            SLPushPicker(manager, vc, @"Jour à régler", days, titles, descs, SLCore.shared.editDay, ^(NSInteger v) {
+                SLCore.shared.editDay = v;
+                SLRebuild(manager, vc);
+            });
+            return YES;
+        }));
+    }
+
     // Règle 1 : pause après un temps de Shorts, puis ça recommence
     add(SLSwitch(@"Pause après une limite", @"Après la limite de temps, les Shorts sont bloqués pendant la durée de pause, puis le compteur repart de zéro",
-                 c.cooldownEnabled, ^BOOL(id cell, BOOL on) { SLCore.shared.cooldownEnabled = on; SLReload(vc); return YES; }));
+                 [c rule:@"cooldown" day:d] != 0, ^BOOL(id cell, BOOL on) { [SLCore.shared setRule:@"cooldown" day:d value:on]; SLReload(vc); return YES; }));
 
     add(SLItem(@"Limite avant la pause", @"Temps de Shorts autorisé avant chaque pause", ^NSString *{
-        return SLMinutes(SLCore.shared.limitMinutes);
+        return SLMinutes([SLCore.shared rule:@"limit" day:d]);
     }, ^BOOL(id cell, NSUInteger arg) {
-        SLPushPicker(manager, vc, @"Limite avant la pause", @[@1, @2, @3, @5, @10, @15, @20, @30, @45, @60, @90, @120],
-                     SLCore.shared.limitMinutes, ^(NSInteger v) { SLCore.shared.limitMinutes = v; });
+        SLPushPicker(manager, vc, @"Limite avant la pause", @[@1, @2, @3, @5, @10, @15, @20, @30, @45, @60, @90, @120, @180],
+                     nil, nil, [SLCore.shared rule:@"limit" day:d], ^(NSInteger v) { [SLCore.shared setRule:@"limit" day:d value:v]; });
         return YES;
     }));
 
     add(SLItem(@"Durée de la pause", @"Pendant combien de temps les Shorts restent bloqués", ^NSString *{
-        return SLMinutes(SLCore.shared.blockMinutes);
+        return SLMinutes([SLCore.shared rule:@"block" day:d]);
     }, ^BOOL(id cell, NSUInteger arg) {
         SLPushPicker(manager, vc, @"Durée de la pause", @[@5, @10, @15, @20, @30, @45, @60, @90, @120, @180, @240],
-                     SLCore.shared.blockMinutes, ^(NSInteger v) { SLCore.shared.blockMinutes = v; });
+                     nil, nil, [SLCore.shared rule:@"block" day:d], ^(NSInteger v) { [SLCore.shared setRule:@"block" day:d value:v]; });
         return YES;
     }));
 
     // Règle 2 : maximum par jour, puis plus de Shorts jusqu'à minuit
     add(SLSwitch(@"Limite quotidienne", @"Une fois le maximum du jour atteint, plus de Shorts jusqu'à minuit",
-                 c.dailyEnabled, ^BOOL(id cell, BOOL on) { SLCore.shared.dailyEnabled = on; SLReload(vc); return YES; }));
+                 [c rule:@"daily" day:d] != 0, ^BOOL(id cell, BOOL on) { [SLCore.shared setRule:@"daily" day:d value:on]; SLReload(vc); return YES; }));
 
     add(SLItem(@"Maximum par jour", @"Temps total de Shorts autorisé dans la journée", ^NSString *{
-        return SLMinutes(SLCore.shared.dailyMinutes);
+        return SLMinutes([SLCore.shared rule:@"dailyMin" day:d]);
     }, ^BOOL(id cell, NSUInteger arg) {
-        SLPushPicker(manager, vc, @"Maximum par jour", @[@5, @10, @15, @20, @30, @45, @60, @90, @120, @180],
-                     SLCore.shared.dailyMinutes, ^(NSInteger v) { SLCore.shared.dailyMinutes = v; });
+        SLPushPicker(manager, vc, @"Maximum par jour", @[@5, @10, @15, @20, @30, @45, @60, @90, @120, @150, @180, @240],
+                     nil, nil, [SLCore.shared rule:@"dailyMin" day:d], ^(NSInteger v) { [SLCore.shared setRule:@"dailyMin" day:d value:v]; });
         return YES;
     }));
+
+    if (c.perDayEnabled) {
+        add(SLItem(@"Copier vers un autre jour", [NSString stringWithFormat:@"Recopie les réglages de %@ sur le jour choisi", SLDayName(d).lowercaseString], nil,
+                   ^BOOL(id cell, NSUInteger arg) {
+            NSMutableArray *values = [NSMutableArray arrayWithObject:@0], *titles = [NSMutableArray arrayWithObject:@"Tous les autres jours"];
+            for (NSInteger i = 1; i <= 7; i++) {
+                if (i == d) continue;
+                [values addObject:@(i)];
+                [titles addObject:SLDayLabel(i)];
+            }
+            SLPushPicker(manager, vc, @"Copier vers", values, titles, nil, -1, ^(NSInteger v) {
+                [SLCore.shared copyRulesFromDay:d toDay:v];
+            });
+            return YES;
+        }));
+    }
 
     add(SLSwitch(@"Compteur pendant les Shorts", @"Affiche le temps utilisé en haut de l'écran", c.showCounter,
                  ^BOOL(id cell, BOOL on) { SLCore.shared.showCounter = on; return YES; }));

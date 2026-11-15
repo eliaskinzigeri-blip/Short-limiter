@@ -96,12 +96,9 @@ static NSArray<NSString *> *SLParse(NSString *list) {
             SLKey("limit"): @5, SLKey("block"): @30, SLKey("cooldown"): @YES, SLKey("daily"): @NO, SLKey("dailyMin"): @30, SLKey("counter"): @YES, SLKey("log"): @YES,
             SLKey("include"): SLDefaultInclude, SLKey("exclude"): SLDefaultExclude, SLKey("exit"): SLDefaultExit,
         }];
-        _limitMinutes = MAX(1, [_d integerForKey:SLKey("limit")]);
-        _blockMinutes = MAX(1, [_d integerForKey:SLKey("block")]);
         _showCounter = [_d boolForKey:SLKey("counter")];
-        _cooldownEnabled = [_d boolForKey:SLKey("cooldown")];
-        _dailyEnabled = [_d boolForKey:SLKey("daily")];
-        _dailyMinutes = MAX(1, [_d integerForKey:SLKey("dailyMin")]);
+        _perDayEnabled = [_d boolForKey:SLKey("perDay")];
+        _editDay = self.todayWeekday;
         _logEnabled = [_d boolForKey:SLKey("log")];
         _includeNames = [_d stringForKey:SLKey("include")] ?: SLDefaultInclude;
         _excludeNames = [_d stringForKey:SLKey("exclude")] ?: SLDefaultExclude;
@@ -123,15 +120,83 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 #pragma mark Réglages
 
-- (void)setLimitMinutes:(NSInteger)v { _limitMinutes = MAX(1, v); [_d setInteger:_limitMinutes forKey:SLKey("limit")]; }
-- (void)setBlockMinutes:(NSInteger)v { _blockMinutes = MAX(1, v); [_d setInteger:_blockMinutes forKey:SLKey("block")]; }
-- (void)setCooldownEnabled:(BOOL)v {
-    _cooldownEnabled = v;
-    [_d setBool:v forKey:SLKey("cooldown")];
-    if (!v) { _blockedUntil = nil; _usedSeconds = 0; [self save]; } // désactiver la règle lève la pause en cours
+// Règles : valeurs communes (clés ShortLimiter.limit, …) ou propres à un jour (ShortLimiter.profiles["1".."7"]).
+// Jour 0 = réglages communs ; 1 = lundi … 7 = dimanche.
+
+NSString *SLDayName(NSInteger day) {
+    NSArray *names = @[@"Tous les jours", @"Lundi", @"Mardi", @"Mercredi", @"Jeudi", @"Vendredi", @"Samedi", @"Dimanche"];
+    return day >= 0 && day < (NSInteger)names.count ? names[day] : @"?";
 }
-- (void)setDailyEnabled:(BOOL)v { _dailyEnabled = v; [_d setBool:v forKey:SLKey("daily")]; }
-- (void)setDailyMinutes:(NSInteger)v { _dailyMinutes = MAX(1, v); [_d setInteger:_dailyMinutes forKey:SLKey("dailyMin")]; }
+
+- (NSInteger)todayWeekday {
+    NSInteger w = [NSCalendar.currentCalendar component:NSCalendarUnitWeekday fromDate:NSDate.date]; // 1 = dimanche
+    return w == 1 ? 7 : w - 1;
+}
+
+- (NSInteger)activeDay { return _perDayEnabled ? self.todayWeekday : 0; }
+
+- (NSInteger)rule:(NSString *)key day:(NSInteger)day {
+    if (day > 0) {
+        NSDictionary *p = [_d dictionaryForKey:SLKey("profiles")][@(day).stringValue];
+        if (p[key]) return [p[key] integerValue];
+    }
+    return [_d integerForKey:[@"ShortLimiter." stringByAppendingString:key]];
+}
+
+- (void)setRule:(NSString *)key day:(NSInteger)day value:(NSInteger)v {
+    BOOL liftPause = [key isEqual:@"cooldown"] && !v && day == self.activeDay;
+    if (day <= 0) {
+        [_d setInteger:v forKey:[@"ShortLimiter." stringByAppendingString:key]];
+    } else {
+        NSMutableDictionary *all = [([_d dictionaryForKey:SLKey("profiles")] ?: @{}) mutableCopy];
+        NSMutableDictionary *p = [(all[@(day).stringValue] ?: @{}) mutableCopy];
+        for (NSString *k in @[@"cooldown", @"limit", @"block", @"daily", @"dailyMin"]) {
+            if (!p[k]) p[k] = @([self rule:k day:0]); // un jour part des réglages communs
+        }
+        p[key] = @(v);
+        all[@(day).stringValue] = p;
+        [_d setObject:all forKey:SLKey("profiles")];
+    }
+    if (liftPause) { _blockedUntil = nil; _usedSeconds = 0; [self save]; } // désactiver la pause lève celle en cours
+}
+
+- (void)copyRulesFromDay:(NSInteger)from toDay:(NSInteger)to {
+    if (from == to) return;
+    NSArray *days = to == 0 ? @[@1, @2, @3, @4, @5, @6, @7] : @[@(to)];
+    for (NSNumber *d in days) {
+        if (d.integerValue == from) continue;
+        for (NSString *k in @[@"cooldown", @"limit", @"block", @"daily", @"dailyMin"])
+            [self setRule:k day:d.integerValue value:[self rule:k day:from]];
+    }
+    [self log:[NSString stringWithFormat:@"Réglages de %@ copiés vers %@", SLDayName(from), SLDayName(to)]];
+}
+
+- (NSString *)summaryForDay:(NSInteger)day {
+    NSMutableArray *parts = [NSMutableArray array];
+    if ([self rule:@"cooldown" day:day])
+        [parts addObject:[NSString stringWithFormat:@"pause %ld/%ld min", (long)[self rule:@"limit" day:day], (long)[self rule:@"block" day:day]]];
+    if ([self rule:@"daily" day:day])
+        [parts addObject:[NSString stringWithFormat:@"max %ld min", (long)[self rule:@"dailyMin" day:day]]];
+    return parts.count ? [parts componentsJoinedByString:@" · "] : @"aucune limite";
+}
+
+- (void)setPerDayEnabled:(BOOL)v {
+    _perDayEnabled = v;
+    [_d setBool:v forKey:SLKey("perDay")];
+    _editDay = v ? self.todayWeekday : 0;
+}
+
+// Règles en vigueur aujourd'hui (moteur) ; les modifier change le jour en cours
+- (NSInteger)limitMinutes { return MAX(1, [self rule:@"limit" day:self.activeDay]); }
+- (NSInteger)blockMinutes { return MAX(1, [self rule:@"block" day:self.activeDay]); }
+- (BOOL)cooldownEnabled { return [self rule:@"cooldown" day:self.activeDay] != 0; }
+- (BOOL)dailyEnabled { return [self rule:@"daily" day:self.activeDay] != 0; }
+- (NSInteger)dailyMinutes { return MAX(1, [self rule:@"dailyMin" day:self.activeDay]); }
+- (void)setLimitMinutes:(NSInteger)v { [self setRule:@"limit" day:self.activeDay value:MAX(1, v)]; }
+- (void)setBlockMinutes:(NSInteger)v { [self setRule:@"block" day:self.activeDay value:MAX(1, v)]; }
+- (void)setCooldownEnabled:(BOOL)v { [self setRule:@"cooldown" day:self.activeDay value:v]; }
+- (void)setDailyEnabled:(BOOL)v { [self setRule:@"daily" day:self.activeDay value:v]; }
+- (void)setDailyMinutes:(NSInteger)v { [self setRule:@"dailyMin" day:self.activeDay value:MAX(1, v)]; }
 - (void)setShowCounter:(BOOL)v { _showCounter = v; [_d setBool:v forKey:SLKey("counter")]; }
 - (void)setLogEnabled:(BOOL)v { _logEnabled = v; [_d setBool:v forKey:SLKey("log")]; [_seen removeAllObjects]; }
 - (void)setIncludeNames:(NSString *)v { _includeNames = [v copy]; [_d setObject:_includeNames forKey:SLKey("include")]; }
@@ -151,8 +216,8 @@ static NSDate *SLNextMidnight(void) {
     return [cal startOfDayForDate:[cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:NSDate.date options:0]];
 }
 
-- (BOOL)cooldownBlocked { return _cooldownEnabled && _blockedUntil && _blockedUntil.timeIntervalSinceNow > 0; }
-- (BOOL)dailyBlocked { return _dailyEnabled && [_today[@"seconds"] doubleValue] >= _dailyMinutes * 60.0; }
+- (BOOL)cooldownBlocked { return self.cooldownEnabled && _blockedUntil && _blockedUntil.timeIntervalSinceNow > 0; }
+- (BOOL)dailyBlocked { return self.dailyEnabled && [_today[@"seconds"] doubleValue] >= self.dailyMinutes * 60.0; }
 - (BOOL)isBlocked { return self.cooldownBlocked || self.dailyBlocked; }
 
 - (double)remainingBlock {
@@ -168,7 +233,7 @@ static NSDate *SLNextMidnight(void) {
         return hit > 0 ? MAX(1, end - hit) : 86400;
     }
     double start = [_d doubleForKey:SLKey("blockStart")];
-    if (!_blockedUntil || start <= 0) return _blockMinutes * 60.0;
+    if (!_blockedUntil || start <= 0) return self.blockMinutes * 60.0;
     return MAX(1, _blockedUntil.timeIntervalSince1970 - start);
 }
 
@@ -191,9 +256,9 @@ static NSDate *SLNextMidnight(void) {
 
 - (double)remainingBeforeBlock {
     double r = -1;
-    if (_cooldownEnabled) r = MAX(0, _limitMinutes * 60.0 - _usedSeconds);
-    if (_dailyEnabled) {
-        double d = MAX(0, _dailyMinutes * 60.0 - [_today[@"seconds"] doubleValue]);
+    if (self.cooldownEnabled) r = MAX(0, self.limitMinutes * 60.0 - _usedSeconds);
+    if (self.dailyEnabled) {
+        double d = MAX(0, self.dailyMinutes * 60.0 - [_today[@"seconds"] doubleValue]);
         r = r < 0 ? d : MIN(r, d);
     }
     return r;
@@ -273,17 +338,17 @@ static NSDate *SLNextMidnight(void) {
         double dt = MIN(MAX([now timeIntervalSinceDate:_lastTick], 0), 2);
         _usedSeconds += dt;
         [self bump:@"seconds" by:dt];
-        if (_dailyEnabled && !_today[@"dailyHit"] && [_today[@"seconds"] doubleValue] >= _dailyMinutes * 60.0) {
+        if (self.dailyEnabled && !_today[@"dailyHit"] && [_today[@"seconds"] doubleValue] >= self.dailyMinutes * 60.0) {
             _today[@"dailyHit"] = @(now.timeIntervalSince1970);
             [self bump:@"blocks" by:1];
-            [self log:[NSString stringWithFormat:@"Limite du jour atteinte (%ld min) : Shorts bloqués jusqu'à minuit", (long)_dailyMinutes]];
+            [self log:[NSString stringWithFormat:@"Limite du jour atteinte (%ld min) : Shorts bloqués jusqu'à minuit", (long)self.dailyMinutes]];
             [self save];
-        } else if (_cooldownEnabled && _usedSeconds >= _limitMinutes * 60.0) {
-            _blockedUntil = [now dateByAddingTimeInterval:_blockMinutes * 60.0];
+        } else if (self.cooldownEnabled && _usedSeconds >= self.limitMinutes * 60.0) {
+            _blockedUntil = [now dateByAddingTimeInterval:self.blockMinutes * 60.0];
             [_d setDouble:now.timeIntervalSince1970 forKey:SLKey("blockStart")];
             _usedSeconds = 0;
             [self bump:@"blocks" by:1];
-            [self log:[NSString stringWithFormat:@"Limite atteinte : Shorts bloqués %ld min", (long)_blockMinutes]];
+            [self log:[NSString stringWithFormat:@"Limite atteinte : Shorts bloqués %ld min", (long)self.blockMinutes]];
             [self save];
         } else if (++_ticksSinceSave >= 5) {
             [self save];

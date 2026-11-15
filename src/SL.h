@@ -18,6 +18,13 @@
 @property (nonatomic) BOOL cooldownEnabled;     // règle 1 : pause de blockMinutes après limitMinutes (oui par défaut)
 @property (nonatomic) BOOL dailyEnabled;        // règle 2 : plus de Shorts jusqu'à minuit après dailyMinutes (non par défaut)
 @property (nonatomic) NSInteger dailyMinutes;   // 30 par défaut
+@property (nonatomic) BOOL perDayEnabled;       // règles différentes selon le jour de la semaine
+@property (nonatomic) NSInteger editDay;        // jour modifié dans les réglages (0 = tous, 1 = lundi … 7 = dimanche)
+@property (nonatomic, readonly) NSInteger todayWeekday;
+- (NSInteger)rule:(NSString *)key day:(NSInteger)day;   // clés : cooldown, limit, block, daily, dailyMin
+- (void)setRule:(NSString *)key day:(NSInteger)day value:(NSInteger)value;
+- (void)copyRulesFromDay:(NSInteger)from toDay:(NSInteger)to; // to = 0 : tous les jours
+- (NSString *)summaryForDay:(NSInteger)day;
 @property (nonatomic) BOOL showCounter;         // petit compteur en haut de l'écran sur les Shorts
 @property (nonatomic) BOOL logEnabled;          // journal des écrans vus
 @property (nonatomic, copy) NSString *includeNames; // morceaux de noms de classes des écrans Shorts
@@ -64,5 +71,6 @@
 @end
 
 NSString *SLFormat(double seconds);
+NSString *SLDayName(NSInteger day); // 0 = tous les jours, 1 = lundi … 7 = dimanche
 void SLInstallYouTubeSettings(void); // rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);

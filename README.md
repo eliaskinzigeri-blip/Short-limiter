@@ -19,6 +19,8 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
     puis le compteur repart de zéro ;
   - **Limite quotidienne** (désactivée par défaut) : après 30 min de Shorts dans la journée (réglable), plus de
     Shorts jusqu'à minuit.
+- **Réglages selon le jour** (option) : chaque jour de la semaine a ses propres règles. « Jour à régler » choisit
+  le jour modifié, « Copier vers un autre jour » recopie ses réglages (par exemple lundi → mardi et jeudi).
 - **Blocage** : un écran
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de
