@@ -49,6 +49,7 @@
 + (instancetype)shared;
 - (void)refresh;
 - (void)presentSettings;
+- (void)toast:(NSString *)text;
 @end
 
 /// Écran des réglages et des statistiques.

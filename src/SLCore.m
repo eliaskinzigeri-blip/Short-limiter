@@ -76,6 +76,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     NSMutableArray *_history;
     NSMutableSet<NSString *> *_seen;
     __weak UIViewController *_shortsVC;
+    NSString *_hitName;
     NSDate *_lastExit;
     NSUInteger _exitStep;
     int _ticksSinceSave;
@@ -180,6 +181,10 @@ static NSArray<NSString *> *SLParse(NSString *list) {
         [nc addObserver:self selector:@selector(save) name:name object:nil];
     }
     [nc addObserver:self selector:@selector(tick) name:UIApplicationDidBecomeActiveNotification object:nil];
+    // Preuve que le tweak est chargé
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[SLOverlay shared] toast:@"ShortLimiter actif · appui long à 3 doigts : réglages"];
+    });
 }
 
 - (void)tick {
@@ -198,7 +203,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     BOOL on = vc != nil;
     if (on != _onShorts) {
         _onShorts = on;
-        _matchedName = on ? NSStringFromClass(vc.class) : nil;
+        _matchedName = on ? _hitName : nil;
         _exitStep = 0;
         if (on) [self bump:@"entries" by:1];
         [self log:on ? [NSString stringWithFormat:@"Shorts : OUI (%@)", _matchedName] : @"Shorts : non"];
@@ -266,10 +271,60 @@ static NSArray<NSString *> *SLParse(NSString *list) {
 
 - (UIViewController *)findShorts {
     NSArray *inc = SLParse(_includeNames), *exc = SLParse(_excludeNames);
+    _hitName = nil;
     if (!inc.count) return nil;
+    NSArray<UIWindow *> *windows = [self appWindows];
+    // 1. Contrôleurs de vue affichés
     NSHashTable *visited = [NSHashTable weakObjectsHashTable];
-    for (UIWindow *w in [self appWindows]) {
+    for (UIWindow *w in windows) {
         UIViewController *found = [self scan:w.rootViewController window:w inc:inc exc:exc visited:visited depth:0];
+        if (found) {
+            _hitName = [self describe:found];
+            return found;
+        }
+    }
+    // 2. Grandes vues affichées (certains écrans sont des vues dans un contrôleur générique)
+    for (UIWindow *w in windows) {
+        double total = w.bounds.size.width * w.bounds.size.height;
+        UIView *v = [self scanView:w window:w total:total inc:inc exc:exc depth:0];
+        if (v) {
+            _hitName = [self describe:v];
+            UIResponder *r = v;
+            while (r && ![r isKindOfClass:UIViewController.class]) r = r.nextResponder;
+            return (UIViewController *)r ?: w.rootViewController;
+        }
+    }
+    return nil;
+}
+
+/// Nom de classe, plus l'identifiant d'accessibilité s'il y en a un (aussi pris en compte par la détection).
+- (NSString *)describe:(id)obj {
+    NSString *name = NSStringFromClass([obj class]);
+    UIView *v = [obj isKindOfClass:UIViewController.class] ? ([(UIViewController *)obj isViewLoaded] ? [(UIViewController *)obj view] : nil) : obj;
+    NSString *ident = v.accessibilityIdentifier;
+    return ident.length ? [NSString stringWithFormat:@"%@ #%@", name, ident] : name;
+}
+
+- (UIView *)scanView:(UIView *)v window:(UIWindow *)w total:(double)total inc:(NSArray *)inc exc:(NSArray *)exc depth:(int)depth {
+    if (depth > 80 || v.hidden || v.alpha < 0.01 || total <= 0) return nil;
+    CGSize sz = v.bounds.size;
+    if (sz.width * sz.height >= total * SLMinScreenRatio && v != w) {
+        double ratio = [self ratio:v inWindow:w];
+        if (ratio >= SLMinScreenRatio) {
+            NSString *name = [self describe:v];
+            BOOL match = [self name:name matches:inc excluding:exc];
+            if (_logEnabled && ![_seen containsObject:name]) {
+                [_seen addObject:name];
+                [self log:[NSString stringWithFormat:@"Vue affichée : %@ (%.0f %% de l'écran)%@", name, ratio * 100, match ? @" ← correspond" : @""]];
+            }
+            if (match) return v;
+        }
+    }
+    for (UIView *sub in v.subviews) {
+        // Seules les vues assez grandes peuvent contenir un écran Shorts plein écran
+        CGSize s2 = sub.bounds.size;
+        if (s2.width * s2.height < total * SLMinScreenRatio && !CGSizeEqualToSize(s2, CGSizeZero)) continue;
+        UIView *found = [self scanView:sub window:w total:total inc:inc exc:exc depth:depth + 1];
         if (found) return found;
     }
     return nil;
@@ -280,7 +335,7 @@ static NSArray<NSString *> *SLParse(NSString *list) {
     if (!vc || depth > 60 || [visited containsObject:vc]) return nil;
     [visited addObject:vc];
     if (vc.isViewLoaded && [self isVisible:vc.view inWindow:w]) {
-        NSString *name = NSStringFromClass(vc.class);
+        NSString *name = [self describe:vc];
         double ratio = [self ratio:vc.view inWindow:w];
         if (_logEnabled && ratio >= 0.2 && ![_seen containsObject:name]) {
             [_seen addObject:name];

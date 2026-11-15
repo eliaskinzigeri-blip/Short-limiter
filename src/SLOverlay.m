@@ -34,6 +34,8 @@
     UILabel *_countdown;
     UILabel *_detail;
     BOOL _settingsOpen;
+    UILabel *_toast;
+    NSDate *_toastUntil;
 }
 
 + (instancetype)shared {
@@ -116,11 +118,29 @@
     [stack setCustomSpacing:28 afterView:_detail];
     [_panel addSubview:stack];
 
+    // Message bref (ex. confirmation au lancement)
+    _toast = [UILabel new];
+    _toast.translatesAutoresizingMaskIntoConstraints = NO;
+    _toast.backgroundColor = [UIColor colorWithRed:0.30 green:0.16 blue:0.70 alpha:0.95];
+    _toast.textColor = UIColor.whiteColor;
+    _toast.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    _toast.textAlignment = NSTextAlignmentCenter;
+    _toast.numberOfLines = 0;
+    _toast.layer.cornerRadius = 12;
+    _toast.clipsToBounds = YES;
+    _toast.hidden = YES;
+    [root addSubview:_toast];
+
     UILayoutGuide *safe = root.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
         [_pill.topAnchor constraintEqualToAnchor:safe.topAnchor constant:4],
         [_pill.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
         [_pill.heightAnchor constraintEqualToConstant:26],
+
+        [_toast.topAnchor constraintEqualToAnchor:safe.topAnchor constant:40],
+        [_toast.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
+        [_toast.widthAnchor constraintLessThanOrEqualToAnchor:root.widthAnchor constant:-40],
+        [_toast.heightAnchor constraintGreaterThanOrEqualToConstant:40],
 
         [_panel.topAnchor constraintEqualToAnchor:root.topAnchor],
         [_panel.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
@@ -141,7 +161,9 @@
     SLCore *c = SLCore.shared;
     BOOL block = c.onShorts && c.isBlocked && !_settingsOpen;
     BOOL pill = c.onShorts && !c.isBlocked && c.showCounter && !_settingsOpen;
-    if (!block && !pill && !_settingsOpen) {
+    BOOL toast = _toastUntil && _toastUntil.timeIntervalSinceNow > 0 && !_settingsOpen;
+    _toast.hidden = !toast;
+    if (!block && !pill && !toast && !_settingsOpen) {
         _window.hidden = YES;
         return;
     }
@@ -161,6 +183,13 @@
                         SLFormat(c.remainingBlock), SLFormat([c.today[@"seconds"] doubleValue])];
     }
     _window.hidden = NO;
+}
+
+- (void)toast:(NSString *)text {
+    if (![self ensureWindow]) return;
+    _toast.text = [NSString stringWithFormat:@"   %@   ", text];
+    _toastUntil = [NSDate dateWithTimeIntervalSinceNow:4];
+    [self refresh];
 }
 
 - (void)presentSettings {
