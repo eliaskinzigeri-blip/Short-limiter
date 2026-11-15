@@ -8,8 +8,11 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
 - **Appui long sur une vidéo à la demande** (VOD, clip) : lecture accélérée (×2 par défaut) tant que le doigt reste
   posé, avec une pastille « 2× ▶▶ » ; la vitesse normale revient quand tu relâches.
 - **Double appui sur les côtés de la vidéo** : à gauche −10 s, à droite +10 s (réglable : 5 à 30 s) ; les doubles
-  appuis rapprochés s'additionnent (⏪ 20 s, 30 s…). **En direct, pas de recul** : Twitch utilise le lecteur
-  Amazon IVS, qui ne garde rien en arrière sur un direct ; le double appui y reste donc celui de Twitch.
+  appuis rapprochés s'additionnent (⏪ 20 s, 30 s…). **En direct** : le lecteur de Twitch (Amazon IVS) ne
+  garde rien en arrière, donc le tweak garde lui-même la **dernière minute** : il note les morceaux du direct
+  publiés par Twitch (juste leurs adresses) et, au double appui à gauche, les rejoue avec le lecteur d'Apple
+  par-dessus la vidéo, le direct continuant en sourdine. « Revenir au direct », un double appui à droite jusqu'au
+  bout, ou la fin de la minute gardée ramènent au direct.
 - **Chat par-dessus la vidéo** : sur les côtés, le double appui ne sert plus qu'à reculer / avancer. Au milieu,
   il reste celui de Twitch. En plein écran (paysage), un bouton **« 💬 Chat »** en haut à gauche fait la même chose
   que le double appui de Twitch.

@@ -10,6 +10,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
+#import "SBDVR.h"
 
 #ifndef SB_VERSION
 #define SB_VERSION "dev"
@@ -24,7 +25,7 @@ static NSString *SBLogPath(void) {
     return [docs stringByAppendingPathComponent:@"StreamBoost-journal.txt"];
 }
 
-static void SBLog(NSString *line) {
+void SBLog(NSString *line) {
     static NSDateFormatter *f;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ f = [NSDateFormatter new]; f.dateFormat = @"yyyy-MM-dd HH:mm:ss"; });
@@ -493,7 +494,11 @@ static UIWindowScene *SBScene(void) {
         id p = nil;
         int side = [self sideAt:g player:&p video:NULL];
         // Direct sans recul possible (lecteur IVS de Twitch) : le double appui reste entièrement celui de Twitch
-        return side != 0 && SBCanSeek(p);
+        if (side == 0) return NO;
+        if (SBCanSeek(p)) return YES;
+        // Direct IVS : recul possible grâce à la mémoire de la dernière minute
+        SBDVR *dvr = SBDVR.shared;
+        return SBIsLive(p) && (dvr.replaying || (side < 0 && dvr.bufferedSeconds >= 3));
     }
     return YES;
 }
@@ -635,16 +640,19 @@ static UIWindowScene *SBScene(void) {
     if (side == 0) return; // milieu : Twitch garde son double appui (chat)
     CGRect r = [video convertRect:video.bounds toView:nil];
     double sign = side;
-    double applied = SBSeekBy(p, sign * SBStep());
+    BOOL viaMemory = !SBCanSeek(p) && SBIsLive(p);
+    double applied = viaMemory ? [SBDVR.shared seekBy:sign * SBStep() inView:video] : SBSeekBy(p, sign * SBStep());
     BOOL chained = _lastSeek && -_lastSeek.timeIntervalSinceNow < 1.2 && (_seekTotal * sign) > 0;
     _seekTotal = (chained ? _seekTotal : 0) + applied;
     _lastSeek = NSDate.date;
     SBLog([NSString stringWithFormat:@"Double appui %@ : %+.0f s demandé, %+.1f s appliqué (%@, %@)", sign < 0 ? @"gauche" : @"droite",
            sign * SBStep(), applied, SBIsLive(p) ? @"direct" : @"vidéo", NSStringFromClass([p class])]);
     if (![self ensureWindow]) return;
-    if (fabs(applied) < 0.5) {
+    if (viaMemory && !SBDVR.shared.replaying && sign > 0 && fabs(applied) >= 0.5) {
+        _seekLabel.text = @"En direct";
+    } else if (fabs(applied) < 0.5) {
         _seekLabel.text = sign < 0 ? @"Début atteint" : @"Déjà au direct";
-        if (sign < 0 && SBIsLive(p)) _seekLabel.text = @"Retour impossible";
+        if (sign < 0 && SBIsLive(p)) _seekLabel.text = viaMemory ? @"Mémoire vide" : @"Retour impossible";
     } else {
         _seekLabel.text = sign < 0 ? [NSString stringWithFormat:@"⏪ %.0f s", _seekTotal] : [NSString stringWithFormat:@"+%.0f s ⏩", _seekTotal];
     }
@@ -660,8 +668,13 @@ static UIWindowScene *SBScene(void) {
 #pragma mark Bouton « Revenir au direct »
 
 - (void)goLive {
-    id p = _livePlayer;
-    if (p) SBJumpToLive(p);
+    if (SBDVR.shared.replaying) {
+        SBLog(@"Relecture : retour au direct (bouton)");
+        [SBDVR.shared stopReplay];
+    } else {
+        id p = _livePlayer;
+        if (p) SBJumpToLive(p);
+    }
     _liveButton.hidden = YES;
 }
 
@@ -686,6 +699,11 @@ static UIWindowScene *SBScene(void) {
     _livePlayer = best;
     _lastLatency = best ? bestLatency : -1;
 
+    // Mémoire de la dernière minute du direct (lecteur IVS)
+    Class ivs = SBIVS();
+    [SBDVR.shared watchPlayer:(best && ivs && [best isKindOfClass:ivs]) ? best : nil];
+    if (SBDVR.shared.replaying) _lastLatency = SBDVR.shared.behindLive;
+
     // Doubles appuis de Twitch sur la vidéo : recherche toutes les 2 s pendant une lecture
     BOOL playing = NO;
     for (id p in SBPlayers.allObjects) if (SBIsPlaying(p)) { playing = YES; break; }
@@ -695,7 +713,7 @@ static UIWindowScene *SBScene(void) {
     }
     if (best && bestLatency >= SBThreshold())
         SBLogOnce(@"late", [NSString stringWithFormat:@"Retard sur le direct détecté : %.0f s (%@)", bestLatency, NSStringFromClass([best class])]);
-    [self refreshWithLatency:best ? bestLatency : -1];
+    [self refreshWithLatency:_lastLatency];
 }
 
 - (void)refresh { [self refreshWithLatency:_lastLatency]; }
