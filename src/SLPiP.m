@@ -89,6 +89,8 @@ UIViewController *SLVisiblePlayerVC(void) {
     return nil;
 }
 
+void SLPiPRemember(UIView *renderView, AVPictureInPictureController *av);
+
 static id SLPiPControllerOf(UIViewController *playerVC) {
     return SLKVC(SLKVC(playerVC, @"_playbackController"), @"_playerPIPController");
 }
@@ -124,9 +126,64 @@ void SLStartPiP(UIViewController *playerVC) {
     AVPictureInPictureController *av = SLAVPiP(controller);
     if (av.pictureInPicturePossible && !av.pictureInPictureActive) [av startPictureInPicture];
     UIView *render = SLKVC(SLKVC(controller, @"_pipController"), @"HAMPlayerView");
+    SLPiPRemember(render, av);
     [SLCore.shared log:[NSString stringWithFormat:@"PiP : demandé (contrôleur Apple %@, possible %@, rendu %@)", av ? @"trouvé" : @"absent",
                         av.pictureInPicturePossible ? @"oui" : @"non", render ? NSStringFromClass(render.class) : @"?"]];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [SLCore.shared log:[NSString stringWithFormat:@"PiP : %@", av.pictureInPictureActive ? @"actif" : @"pas démarré"]];
     });
+}
+
+#pragma mark PiP noir : calque vidéo en échec en arrière-plan
+
+static __weak UIView *SLPiPRenderView;   // vue de rendu donnée au PiP (MLHAMSBDLSampleBufferRenderingView)
+static __weak AVPictureInPictureController *SLPiPAV;
+
+static AVSampleBufferDisplayLayer *SLFindSBDL(CALayer *layer, int depth) {
+    if (!layer || depth > 6) return nil;
+    if ([layer isKindOfClass:AVSampleBufferDisplayLayer.class]) return (AVSampleBufferDisplayLayer *)layer;
+    for (CALayer *sub in layer.sublayers) {
+        AVSampleBufferDisplayLayer *f = SLFindSBDL(sub, depth + 1);
+        if (f) return f;
+    }
+    return nil;
+}
+
+void SLPiPRemember(UIView *renderView, AVPictureInPictureController *av) {
+    SLPiPRenderView = renderView;
+    SLPiPAV = av;
+}
+
+/// Appelé chaque seconde (même en arrière-plan) : si le calque du PiP est en échec, on le remet à zéro pour que
+/// YouTube puisse de nouveau y envoyer des images.
+void SLPiPWatchdog(void) {
+    AVPictureInPictureController *av = SLPiPAV;
+    if (!av.pictureInPictureActive) return;
+    AVSampleBufferDisplayLayer *l = SLFindSBDL(SLPiPRenderView.layer, 0);
+    if (!l) { [SLCore.shared logOnce:@"pip-nolayer" text:@"PiP : calque vidéo introuvable"]; return; }
+    BOOL failed = l.status == AVQueuedSampleBufferRenderingStatusFailed;
+    BOOL needsFlush = [l respondsToSelector:@selector(requiresFlushToResumeDecoding)] && l.requiresFlushToResumeDecoding;
+    BOOL background = UIApplication.sharedApplication.applicationState == UIApplicationStateBackground;
+    [SLCore.shared logOnce:[NSString stringWithFormat:@"pip-layer-%d-%d-%d", failed, needsFlush, background]
+                      text:[NSString stringWithFormat:@"PiP : calque %@, état %ld%@%@", background ? @"(arrière-plan)" : @"(premier plan)",
+                            (long)l.status, l.error ? [NSString stringWithFormat:@", erreur %ld", (long)l.error.code] : @"",
+                            needsFlush ? @", à remettre à zéro" : @""]];
+    if (failed || needsFlush) {
+        [l flush];
+        [SLCore.shared log:@"PiP : calque remis à zéro"];
+    }
+}
+
+/// Réglages internes de YouTube que YouPiP force aussi (corrections du comportement du PiP, pas d'accès au PiP).
+void SLInstallPiPFixes(void) {
+    static BOOL done;
+    if (done) return;
+    done = YES;
+    Class c = NSClassFromString(@"YTHotConfig");
+    for (NSString *name in @[@"iosPlayerClientSharedConfigSkipPipToggleOnStateChange",
+                             @"iosPlayerClientSharedConfigOffsetPipControllerTimeRangeWithSbdlCurrentTime"]) {
+        Method m = c ? class_getInstanceMethod(c, NSSelectorFromString(name)) : NULL;
+        if (!m) continue;
+        method_setImplementation(m, imp_implementationWithBlock(^BOOL(id self) { return NO; }));
+    }
 }

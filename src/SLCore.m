@@ -314,6 +314,7 @@ static NSDate *SLNextMidnight(void) {
 
 - (void)tick {
     NSDate *now = NSDate.date;
+    SLPiPWatchdog();
     [self rollDay:now];
     if (_blockedUntil && _blockedUntil.timeIntervalSinceNow <= 0) {
         _blockedUntil = nil;
@@ -709,5 +710,6 @@ static NSDate *SLNextMidnight(void) {
 
 __attribute__((constructor)) static void SLInit(void) {
     SLInstallYouTubeSettings();
+    SLInstallPiPFixes();
     dispatch_async(dispatch_get_main_queue(), ^{ [[SLCore shared] start]; });
 }
