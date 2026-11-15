@@ -208,6 +208,62 @@ static BOOL SBCanSeek(id p) {
     return NO;
 }
 
+#pragma mark Adresse du flux chargée dans le lecteur IVS
+
+static const void *SBURLKey = &SBURLKey;
+
+static NSURL *SBAsURL(id arg) {
+    if ([arg isKindOfClass:NSURL.class]) return arg;
+    if ([arg isKindOfClass:NSString.class] && [(NSString *)arg hasPrefix:@"http"]) return [NSURL URLWithString:arg];
+    return nil;
+}
+
+/// Adresse du flux : propriété `path` du lecteur, sinon celle captée au chargement.
+NSURL *SBPlayerURL(id p) {
+    NSURL *url = nil;
+    if ([p respondsToSelector:@selector(path)]) {
+        id v = ((id (*)(id, SEL))objc_msgSend)(p, @selector(path));
+        url = SBAsURL(v);
+    }
+    return url ?: objc_getAssociatedObject(p, SBURLKey);
+}
+
+/// Intercepte les méthodes « load…: » du lecteur IVS pour noter l'adresse donnée par Twitch.
+static void SBHookIVSLoads(void) {
+    Class c = NSClassFromString(@"IVSPlayer");
+    if (!c) return;
+    unsigned int n = 0;
+    Method *methods = class_copyMethodList(c, &n);
+    NSMutableArray *names = [NSMutableArray array];
+    for (unsigned int i = 0; i < n; i++) {
+        SEL sel = method_getName(methods[i]);
+        NSString *name = NSStringFromSelector(sel);
+        NSString *low = name.lowercaseString;
+        if ([low containsString:@"path"] || [low containsString:@"url"] || [low containsString:@"load"] || [low containsString:@"source"] ||
+            [low containsString:@"latency"] || [low containsString:@"seek"])
+            [names addObject:name];
+        if (![name hasPrefix:@"load"] || [name componentsSeparatedByString:@":"].count != 2) continue;
+        char *type = method_copyArgumentType(methods[i], 2);
+        BOOL isObject = type && type[0] == '@';
+        free(type);
+        if (!isObject) continue;
+        void (*orig)(id, SEL, id) = (void *)method_getImplementation(methods[i]);
+        method_setImplementation(methods[i], imp_implementationWithBlock(^(id self, id arg) {
+            NSURL *url = SBAsURL(arg);
+            if (!url && [arg respondsToSelector:@selector(path)]) url = SBAsURL(((id (*)(id, SEL))objc_msgSend)(arg, @selector(path)));
+            if (!url && [arg respondsToSelector:@selector(url)]) url = SBAsURL(((id (*)(id, SEL))objc_msgSend)(arg, @selector(url)));
+            if (url) objc_setAssociatedObject(self, SBURLKey, url, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            NSString *desc = url ? [NSString stringWithFormat:@"%@%@", url.host ?: @"", url.path.lastPathComponent ?: @""] : NSStringFromClass([arg class]);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                SBLog([NSString stringWithFormat:@"IVS %@ appelé (%@)", name, desc]);
+            });
+            orig(self, sel, arg);
+        }));
+    }
+    free(methods);
+    SBLog([NSString stringWithFormat:@"IVSPlayer : méthodes utiles %@", [names componentsJoinedByString:@", "]]);
+}
+
 #pragma mark Suivi des lecteurs (méthode play)
 
 static NSHashTable *SBPlayers;
@@ -689,6 +745,14 @@ static int SBSide(CGPoint pt, UIView *video) {
     _livePlayer = best;
     _lastLatency = best ? bestLatency : -1;
 
+    for (id p in SBPlayers.allObjects) {
+        NSInteger st = [p respondsToSelector:@selector(state)] ? ((NSInteger (*)(id, SEL))objc_msgSend)(p, @selector(state)) : -1;
+        CMTime d = SBDuration(p);
+        SBLogOnce([NSString stringWithFormat:@"state-%ld-%d", (long)st, (int)CMTIME_IS_INDEFINITE(d)],
+                  [NSString stringWithFormat:@"Lecteur %@ : état %ld, durée %@, adresse %@", NSStringFromClass([p class]), (long)st,
+                   CMTIME_IS_INDEFINITE(d) ? @"indéfinie (direct)" : [NSString stringWithFormat:@"%.0f s", CMTimeGetSeconds(d)],
+                   SBPlayerURL(p) ? @"connue" : @"inconnue"]);
+    }
     // Mémoire de la dernière minute du direct (lecteur IVS)
     Class ivs = SBIVS();
     [SBDVR.shared watchPlayer:(best && ivs && [best isKindOfClass:ivs]) ? best : nil];
@@ -829,6 +893,7 @@ __attribute__((constructor)) static void SBInit(void) {
     SBHookSendEvent();
     SBHookPlay(AVPlayer.class);
     SBHookPlay(SBIVS());
+    SBHookIVSLoads();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!SBIVS()) SBLog(@"IVSPlayer absent au chargement");
         [[SBCore shared] start];

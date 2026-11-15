@@ -63,8 +63,12 @@ static NSString *const SBScheme = @"sbdvr";
         return;
     }
     _ivs = player;
-    NSURL *path = [player respondsToSelector:@selector(path)] ? ((NSURL * (*)(id, SEL))objc_msgSend)(player, @selector(path)) : nil;
-    if (!path) return;
+    NSURL *path = SBPlayerURL(player);
+    if (!path) {
+        static BOOL said;
+        if (!said) { said = YES; SBLog(@"Mémoire du direct : adresse du flux inconnue (le lecteur ne la donne pas)"); }
+        return;
+    }
     if (![path isEqual:_source]) {
         if (_replay) [self stopReplay];
         [self reset];
@@ -233,7 +237,12 @@ static NSDictionary *SBAttrs(NSString *line) {
 
 - (double)seekBy:(double)delta inView:(UIView *)videoView {
     if (!_replay) {
-        if (delta >= 0 || _bufferedSeconds < 3 || !videoView) return 0;
+        if (delta >= 0 || !videoView) return 0;
+        if (_bufferedSeconds < 3) {
+            SBLog([NSString stringWithFormat:@"Mémoire vide : %.0f s gardées (flux %@, liste %@)", _bufferedSeconds,
+                   _source ? @"connu" : @"inconnu", _media ? @"trouvée" : @"non trouvée"]);
+            return 0;
+        }
         _playlist = [self buildPlaylist];
         _snapDate = NSDate.date;
         double start = MAX(0, _snapDuration + delta);
