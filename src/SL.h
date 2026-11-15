@@ -73,5 +73,8 @@
 NSString *SLFormat(double seconds);
 NSString *SLDayName(NSInteger day); // 0 = tous les jours, 1 = lundi … 7 = dimanche
 void SLInstallYouTubeSettings(void);
+void SLInstallPiPCompat(void);       // PiP noir : rendu vidéo classique
+BOOL SLPiPCompatEnabled(void);
+void SLSetPiPCompatEnabled(BOOL on);
 void SLDecorateSettings(void);     // icône barrée de la rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);

@@ -21,6 +21,8 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
     Shorts jusqu'à minuit.
 - **Réglages selon le jour** (option) : chaque jour de la semaine a ses propres règles. « Jour à régler » choisit
   le jour modifié, « Copier vers un autre jour » recopie ses réglages (par exemple lundi → mardi et jeudi).
+- **PiP : mode compatibilité** (activé par défaut) : si le PiP affiche un écran noir avec le son, YouTube utilise
+  le rendu vidéo classique d'Apple, qui s'affiche en PiP. Ne débloque rien : le PiP doit déjà démarrer.
 - **Blocage** : un écran
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de

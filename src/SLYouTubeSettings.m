@@ -215,6 +215,9 @@ static void SLBuildSection(id manager) {
         return YES;
     }));
 
+    add(SLSwitch(@"PiP : mode compatibilité", @"Corrige le PiP noir (son sans image). Relance YouTube après un changement",
+                 SLPiPCompatEnabled(), ^BOOL(id cell, BOOL on) { SLSetPiPCompatEnabled(on); return YES; }));
+
     add(SLSwitch(@"Compteur pendant les Shorts", @"Affiche le temps utilisé en haut de l'écran", c.showCounter,
                  ^BOOL(id cell, BOOL on) { SLCore.shared.showCounter = on; return YES; }));
 
