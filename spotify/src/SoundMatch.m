@@ -478,6 +478,9 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     SMLog([NSString stringWithFormat:@"SoundMatch %s chargé dans %@ (%@)", SM_VERSION, NSBundle.mainBundle.bundleIdentifier,
            [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]);
     SMApplySaved();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        SMDiscoverSpotifyEqualizer();
+    });
     _timer = [NSTimer timerWithTimeInterval:1 target:self selector:@selector(tick) userInfo:nil repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -684,6 +687,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     if (!top || [top isKindOfClass:UIAlertController.class]) return;
     float saved[SM_BANDS];
     SMLoadSaved(saved);
+    NSString *savedText = SMDescribe(saved);
     BOOL enabled = SMEnabled();
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SoundMatch"
         message:[NSString stringWithFormat:@"Égaliseur %@\nVersion %s", enabled ? @"activé" : @"désactivé", SM_VERSION]
@@ -698,7 +702,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Voir mes réglages" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Mon égaliseur"
-            message:[NSString stringWithFormat:@"%@\n\nÀ recopier dans Spotify si tu veux : Paramètres › Lecture › Égaliseur.", SMDescribe(saved)]
+            message:[NSString stringWithFormat:@"%@\n\nÀ recopier dans Spotify si tu veux : Paramètres › Lecture › Égaliseur.", savedText]
             preferredStyle:UIAlertControllerStyleAlert];
         [v addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
         [self present:v from:[self topController]];
@@ -721,6 +725,57 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 }
 
 @end
+
+#pragma mark Repérage de l'égaliseur de Spotify (pour pouvoir le régler directement)
+
+static NSString *SMShort(id v) {
+    NSString *d = [v description];
+    d = [[d componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsJoinedByString:@" "];
+    return d.length > 160 ? [[d substringToIndex:160] stringByAppendingString:@"…"] : d;
+}
+
+/// Journal : réglages enregistrés et classes de l'app qui parlent d'égaliseur.
+static void SMDiscoverSpotifyEqualizer(void) {
+    NSDictionary *all = NSUserDefaults.standardUserDefaults.dictionaryRepresentation;
+    int found = 0;
+    for (NSString *key in [all.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        NSString *low = key.lowercaseString;
+        if ([low hasPrefix:@"soundmatch."]) continue;
+        if ([low containsString:@"equaliz"] || [low containsString:@"equalis"] || [low containsString:@"eq_"] || [low hasSuffix:@".eq"] ||
+            [low containsString:@"eqband"] || [low containsString:@"eq.band"] || [low containsString:@"eqpreset"]) {
+            SMLog([NSString stringWithFormat:@"Réglage Spotify : %@ = %@ (%@)", key, SMShort(all[key]), NSStringFromClass([all[key] class])]);
+            found++;
+        }
+    }
+    if (!found) SMLog(@"Réglage Spotify : aucune clé d'égaliseur dans les préférences");
+
+    unsigned int n = 0;
+    Class *classes = objc_copyClassList(&n);
+    int shown = 0;
+    for (unsigned int i = 0; i < n && shown < 25; i++) {
+        const char *cname = class_getName(classes[i]);
+        if (!strcasestr(cname, "equaliz") && !strcasestr(cname, "equalis")) continue;
+        shown++;
+        unsigned int mc = 0;
+        Method *ms = class_copyMethodList(classes[i], &mc);
+        NSMutableArray *names = [NSMutableArray array];
+        for (unsigned int k = 0; k < mc && names.count < 25; k++) {
+            NSString *sel = NSStringFromSelector(method_getName(ms[k]));
+            NSString *low = sel.lowercaseString;
+            if ([low containsString:@"band"] || [low containsString:@"gain"] || [low containsString:@"preset"] || [low containsString:@"enable"] ||
+                [low containsString:@"value"] || [low containsString:@"set"] || [low containsString:@"save"] || [low containsString:@"shared"])
+                [names addObject:sel];
+        }
+        free(ms);
+        unsigned int cm = 0;
+        Method *cms = class_copyMethodList(object_getClass(classes[i]), &cm);
+        for (unsigned int k = 0; k < cm && names.count < 30; k++) [names addObject:[@"+" stringByAppendingString:NSStringFromSelector(method_getName(cms[k]))]];
+        free(cms);
+        SMLog([NSString stringWithFormat:@"Classe Spotify : %s — %@", cname, [names componentsJoinedByString:@", "]]);
+    }
+    free(classes);
+    if (!shown) SMLog(@"Classe Spotify : aucune classe « Equalizer » visible (code Swift ou C++)");
+}
 
 __attribute__((constructor)) static void SMInit(void) {
     SMHookAudio();
