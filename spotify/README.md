@@ -6,7 +6,8 @@ pas de blocage de publicités ni de fonction payante débloquée ; rien n'est en
 
 ## Comment ça marche
 
-1. Appui long à trois doigts → **Trouver mon égaliseur**.
+1. Dans les **Paramètres de Spotify**, touche le bouton vert **« 🎚 SoundMatch : calibrer mon égaliseur »** (ou appui
+   long à trois doigts n'importe où) → **Trouver mon égaliseur**.
 2. Coupe l'égaliseur de Spotify et lance un morceau que tu connais bien.
 3. 9 étapes : à chaque fois, trois versions du même son (**A**, **B**, **C**, dans un ordre mélangé : l'actuelle,
    plus et moins sur une zone — basses, aigus, médiums, présence, voix…). Tu passes de l'une à l'autre sans couper
@@ -14,7 +15,7 @@ pas de blocage de publicités ni de fonction payante débloquée ; rien n'est en
 4. Résultat sur les 6 bandes de l'égaliseur de Spotify (60 Hz, 150 Hz, 400 Hz, 1 kHz, 2,4 kHz, 15 kHz) :
    **Garder et activer** l'applique dans Spotify ; tu peux aussi recopier les valeurs dans l'égaliseur de Spotify.
 
-Menu (appui long à trois doigts) : activer / désactiver ton égaliseur, voir les réglages, remettre à plat, journal.
+Menu (bouton dans les Paramètres de Spotify, ou appui long à trois doigts) : activer / désactiver ton égaliseur, voir les réglages, remettre à plat, journal.
 
 ## Technique
 

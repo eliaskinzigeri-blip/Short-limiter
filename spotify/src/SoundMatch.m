@@ -341,6 +341,9 @@ typedef NS_ENUM(NSInteger, SMMode) { SMModeIntro, SMModeStep, SMModeResult };
     int _selected;
     NSTimer *_timer;
     NSDate *_toastUntil;
+    UIButton *_settingsButton;
+    BOOL _inSettings;
+    NSMutableSet<NSString *> *_seenScreens;
     NSUInteger _loggedAttached;
 }
 
@@ -404,6 +407,17 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     _toast.hidden = YES;
     [root addSubview:_toast];
 
+    // Bouton affiché dans les Paramètres de Spotify : ouvre le menu de SoundMatch
+    _settingsButton = SMButton(@"🎚 SoundMatch : calibrer mon égaliseur", SMGreen(), UIColor.blackColor);
+    _settingsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    _settingsButton.contentEdgeInsets = UIEdgeInsetsMake(0, 18, 0, 18);
+    _settingsButton.layer.shadowColor = UIColor.blackColor.CGColor;
+    _settingsButton.layer.shadowOpacity = 0.4;
+    _settingsButton.layer.shadowRadius = 8;
+    _settingsButton.hidden = YES;
+    [_settingsButton addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
+    [root addSubview:_settingsButton];
+
     _card = [UIView new];
     _card.translatesAutoresizingMaskIntoConstraints = NO;
     _card.backgroundColor = [UIColor colorWithWhite:0.09 alpha:0.98];
@@ -463,6 +477,8 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         [_toast.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
         [_toast.widthAnchor constraintLessThanOrEqualToAnchor:root.widthAnchor constant:-40],
         [_toast.heightAnchor constraintGreaterThanOrEqualToConstant:40],
+        [_settingsButton.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
+        [_settingsButton.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-80],
         [_card.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:12],
         [_card.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-12],
         [_card.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-12],
@@ -497,8 +513,40 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     [self refresh];
 }
 
+/// Écrans de Spotify affichés (noms de classes des contrôleurs visibles).
+- (void)collectScreens:(UIViewController *)vc into:(NSMutableArray *)out depth:(int)depth {
+    if (!vc || depth > 40) return;
+    if (vc.isViewLoaded && vc.view.window && !vc.view.hidden) [out addObject:NSStringFromClass(vc.class)];
+    for (UIViewController *c in vc.childViewControllers) [self collectScreens:c into:out depth:depth + 1];
+    if (vc.presentedViewController.presentingViewController == vc) [self collectScreens:vc.presentedViewController into:out depth:depth + 1];
+}
+
+- (BOOL)settingsVisible {
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (UIWindow *w in [self appWindows]) [self collectScreens:w.rootViewController into:names depth:0];
+    if (!_seenScreens) _seenScreens = [NSMutableSet set];
+    BOOL found = NO;
+    for (NSString *n in names) {
+        if (![_seenScreens containsObject:n]) {
+            [_seenScreens addObject:n];
+            SMLog([NSString stringWithFormat:@"Écran vu : %@", n]);
+        }
+        NSString *low = n.lowercaseString;
+        if ([low containsString:@"setting"] || [low containsString:@"playback"] || [low containsString:@"equaliz"] || [low containsString:@"preference"])
+            found = YES;
+    }
+    return found;
+}
+
+- (void)openMenu {
+    UIViewController *top = [self topController];
+    if (top) [self showMenuFrom:top];
+}
+
 - (void)tick {
     [self installGestures];
+    _inSettings = !_testing && [self settingsVisible];
     if (gAttachedCount == 0 && !_loggedAttached && gLastRender == 0) {
         // rien encore : normal tant qu'aucune musique n'a été lancée
     }
@@ -507,12 +555,13 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 
 - (void)refresh {
     BOOL toast = _toastUntil && _toastUntil.timeIntervalSinceNow > 0;
-    if (!_testing && !toast) {
+    if (!_testing && !toast && !_inSettings) {
         _window.hidden = YES;
         return;
     }
     if (![self ensureWindow]) return;
     _toast.hidden = !toast;
+    _settingsButton.hidden = !_inSettings || _testing;
     _card.hidden = !_testing;
     if (_testing) {
         BOOL sound = CFAbsoluteTimeGetCurrent() - gLastRender < 1.5;
@@ -687,6 +736,11 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     if (g.state != UIGestureRecognizerStateBegan || _testing) return;
     UIViewController *top = [self topController];
     if (!top || [top isKindOfClass:UIAlertController.class]) return;
+    [self showMenuFrom:top];
+}
+
+- (void)showMenuFrom:(UIViewController *)top {
+    if (_testing || [top isKindOfClass:UIAlertController.class]) return;
     float saved[SM_BANDS];
     SMLoadSaved(saved);
     NSString *savedText = SMDescribe(saved);
@@ -695,6 +749,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         message:[NSString stringWithFormat:@"Égaliseur %@\nVersion %s", enabled ? @"activé" : @"désactivé", SM_VERSION]
         preferredStyle:UIAlertControllerStyleActionSheet];
     [a addAction:[UIAlertAction actionWithTitle:@"Trouver mon égaliseur" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        self->_inSettings = NO;
         [self openTest];
     }]];
     [a addAction:[UIAlertAction actionWithTitle:enabled ? @"Désactiver mon égaliseur" : @"Activer mon égaliseur" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
