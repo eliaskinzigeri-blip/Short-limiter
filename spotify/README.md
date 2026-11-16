@@ -11,7 +11,8 @@ pas de blocage de publicités ni de fonction payante débloquée ; rien n'est en
 2. Coupe l'égaliseur de Spotify et lance un morceau que tu connais bien.
 3. 9 étapes : à chaque fois, trois versions du même son (**A**, **B**, **C**, dans un ordre mélangé : l'actuelle,
    plus et moins sur une zone — basses, aigus, médiums, présence, voix…). Tu passes de l'une à l'autre sans couper
-   la musique et tu gardes ta préférée. Les écarts sont grands au début (±6 dB) puis plus fins (±2 dB).
+   la musique et tu gardes ta préférée. Les écarts sont grands au début (±6 dB) puis plus fins (±2 dB). Si tu choisis
+   la version qui monte (ou qui baisse), l'étape recommence pour aller plus loin, jusqu'à ±12 dB.
 4. Résultat sur les 6 bandes de l'égaliseur de Spotify (60 Hz, 150 Hz, 400 Hz, 1 kHz, 2,4 kHz, 15 kHz) :
    **Mettre dans l'égaliseur de Spotify** écrit le réglage dans l'égaliseur de Spotify et l'allume (l'égaliseur
    du tweak s'efface alors). Pendant le test, l'égaliseur de Spotify est coupé, puis rétabli si tu fermes le test.

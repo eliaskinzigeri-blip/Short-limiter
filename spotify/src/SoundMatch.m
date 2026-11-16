@@ -66,6 +66,7 @@ typedef struct {
 static float gGains[SM_BANDS];          // gains appliqués (dB)
 static volatile int gVersion = 1;       // change à chaque nouveau réglage
 static volatile int gActive = 0;        // égaliseur appliqué (test en cours ou réglage activé)
+static volatile float gHeadroom = -1;   // pendant le test : réduction fixe (dB) commune aux 3 versions
 static volatile double gLastRender = 0; // dernier passage du son (CFAbsoluteTime)
 
 static void SMSetGains(const float *g, BOOL active) {
@@ -108,7 +109,10 @@ static void SMDesign(SMUnit *u) {
         }
         u->bq[i] = (SMBiquad){(float)(b0 / a0), (float)(b1 / a0), (float)(b2 / a0), (float)(a1 / a0), (float)(a2 / a0)};
     }
-    u->pre = (float)pow(10.0, -maxGain / 20.0); // évite la saturation quand on monte une bande
+    // Pendant le test, les trois versions gardent le même volume de base : celle qui monte une
+    // bande sonne plus fort, comme dans l'égaliseur de Spotify (sinon le test pousse vers le plat).
+    float room = gHeadroom >= 0 ? gHeadroom : maxGain * 0.5f;
+    u->pre = (float)pow(10.0, -room / 20.0);
     u->version = gVersion;
 }
 
@@ -129,7 +133,10 @@ static void SMProcessBuffer(SMUnit *u, void *data, UInt32 frames, int channels, 
         int ch = firstCh + c;
         if (isFloat) {
             float *p = (float *)data + c;
-            for (UInt32 i = 0; i < frames; i++, p += stride) *p = SMRun(u, ch, *p);
+            for (UInt32 i = 0; i < frames; i++, p += stride) {
+                float y = SMRun(u, ch, *p);
+                *p = y > 1.0f ? 1.0f : (y < -1.0f ? -1.0f : y);
+            }
         } else {
             SInt16 *p = (SInt16 *)data + c;
             for (UInt32 i = 0; i < frames; i++, p += stride) {
@@ -421,6 +428,8 @@ typedef NS_ENUM(NSInteger, SMMode) { SMModeIntro, SMModeStep, SMModeResult };
     SMMode _mode;
     BOOL _testing;
     int _step;
+    int _repeat;               // fois où l'étape a été refaite dans le même sens
+    int _dir[3];               // sens de chaque version : 0 actuelle, 1 plus, -1 moins
     float _base[SM_BANDS];      // réglage retenu jusqu'ici
     float _before[SM_BANDS];    // réglage d'avant le test (rétabli si on ferme)
     BOOL _beforeActive;
@@ -685,6 +694,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 
 - (void)cancelTest {
     _testing = NO;
+    gHeadroom = -1;
     SMSetGains(_before, _beforeActive);
     if (_spotifyWasOn) SMSetSpotifyOn(YES);
     SMLog(@"Test : fermé sans enregistrer");
@@ -695,6 +705,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     float flat[SM_BANDS] = {0};
     memcpy(_base, flat, sizeof(_base));
     _step = 0;
+    _repeat = 0;
     [self prepareStep];
 }
 
@@ -710,11 +721,15 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         plus[b] = fminf(12, _base[b] + s.delta);
         minus[b] = fmaxf(-12, _base[b] - s.delta);
     }
+    float top = 0;
+    for (int i = 0; i < SM_BANDS; i++) top = fmaxf(top, fmaxf(plus[i], _base[i]));
+    gHeadroom = top * 0.5f;
     float *versions[3] = {_base, plus, minus};
     int order[3] = {0, 1, 2};
     for (int i = 2; i > 0; i--) { int j = arc4random_uniform(i + 1); int t = order[i]; order[i] = order[j]; order[j] = t; }
     float tmp[3][SM_BANDS];
-    for (int i = 0; i < 3; i++) memcpy(tmp[i], versions[order[i]], sizeof(tmp[i]));
+    int dirs[3] = {0, 1, -1};
+    for (int i = 0; i < 3; i++) { memcpy(tmp[i], versions[order[i]], sizeof(tmp[i])); _dir[i] = dirs[order[i]]; }
     memcpy(_variants, tmp, sizeof(_variants));
     _selected = 0;
     SMSetGains(_variants[0], YES);
@@ -731,12 +746,26 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     switch (_mode) {
         case SMModeIntro:
             _step = 0;
+            _repeat = 0;
             [self prepareStep];
             break;
         case SMModeStep: {
             memcpy(_base, _variants[_selected], sizeof(_base));
-            SMLog([NSString stringWithFormat:@"Test : étape %d (%s) → %@", _step + 1, SMSteps[_step].name, @[@"A", @"B", @"C"][_selected]]);
+            SMStep cur = SMSteps[_step];
+            int dir = _dir[_selected];
+            SMLog([NSString stringWithFormat:@"Test : étape %d (%s) → %@ (%@)", _step + 1, cur.name, @[@"A", @"B", @"C"][_selected],
+                   dir > 0 ? @"plus" : dir < 0 ? @"moins" : @"inchangé"]);
+            // Si on a choisi plus (ou moins), on recommence l'étape pour aller plus loin, jusqu'à ±12 dB
+            BOOL atLimit = NO;
+            for (int k = 0; k < cur.count; k++) if (fabsf(_base[cur.bands[k]]) >= 12) atLimit = YES;
+            if (dir != 0 && !atLimit && _repeat < 4) {
+                _repeat++;
+                [self prepareStep];
+                break;
+            }
+            _repeat = 0;
             if (++_step >= SMStepCount) {
+                gHeadroom = -1;
                 _mode = SMModeResult;
                 SMSetGains(_base, YES);
                 SMLog([NSString stringWithFormat:@"Test : résultat\n%@", SMDescribe(_base)]);
@@ -772,7 +801,9 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             break;
         case SMModeStep:
             _title.text = [NSString stringWithFormat:@"Étape %d / %d · %s", _step + 1, SMStepCount, SMSteps[_step].name];
-            _subtitle.text = @"Écoute chaque version quelques secondes (la musique continue), puis garde celle que tu préfères.";
+            _subtitle.text = _repeat > 0
+                ? @"On continue dans le même sens : une des versions va encore plus loin. Garde celle que tu préfères."
+                : @"Écoute chaque version quelques secondes (la musique continue), puis garde celle que tu préfères.";
             for (int i = 0; i < 3; i++) {
                 UIButton *b = _choiceButtons[i];
                 BOOL on = i == _selected;
