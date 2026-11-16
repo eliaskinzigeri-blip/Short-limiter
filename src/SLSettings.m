@@ -1,4 +1,5 @@
 #import "SL.h"
+#import "NFFocus.h"
 
 typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection, SLHistory, SLSectionCount };
 
@@ -83,7 +84,7 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
         case SLToday: return 4;
-        case SLSettingsSection: return 3;
+        case SLSettingsSection: return 4;
         case SLDetection: return 7;
         default: return MAX(1, (NSInteger)SLCore.shared.history.count);
     }
@@ -102,7 +103,7 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
     SLCore *c = SLCore.shared;
     switch (section) {
         case SLSettingsSection:
-            return @"Le temps passé sur les Shorts (app au premier plan) est cumulé jusqu'à la limite, puis les Shorts sont bloqués pendant la durée choisie. Une nouvelle durée de blocage s'applique au prochain blocage. Appui long à trois doigts n'importe où pour rouvrir cet écran.";
+            return @"Le temps passé sur les Shorts (app au premier plan) est cumulé jusqu'à la limite, puis les Shorts sont bloqués pendant la durée choisie. Mode focus NoteFlow : pendant un focus, YouTube entier est bloqué. Une nouvelle durée de blocage s'applique au prochain blocage. Appui long à trois doigts n'importe où pour rouvrir cet écran.";
         case SLDetection:
             return [NSString stringWithFormat:@"Un écran est reconnu comme Shorts si le nom de sa classe contient un des noms recherchés (sans contenir un nom exclu) et qu'il occupe au moins la moitié de l'écran. Le journal liste les écrans vus : ouvre un Short, puis regarde le journal pour ajuster les noms.\nÉcran Shorts actuel : %@\nShortLimiter %s", c.matchedName ?: @"aucun", SL_VERSION];
         default: return nil;
@@ -138,7 +139,14 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
             switch (ip.row) {
                 case 0: return [self stepperCell:@"Limite" value:c.limitMinutes min:1 max:180 step:1 tag:0];
                 case 1: return [self stepperCell:@"Durée du blocage" value:c.blockMinutes min:5 max:720 step:5 tag:1];
-                default: return [self switchCell:@"Compteur pendant les Shorts" on:c.showCounter action:@selector(toggleCounter:)];
+                case 2: return [self switchCell:@"Compteur pendant les Shorts" on:c.showCounter action:@selector(toggleCounter:)];
+                default: {
+                    // Blocage de toute l'app pendant un focus NoteFlow (shared/NFFocus.m)
+                    UITableViewCell *cell = [self valueCell:@"Mode focus NoteFlow" value:NFFocusStatus()];
+                    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+                    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+                    return cell;
+                }
             }
         case SLDetection:
             switch (ip.row) {
@@ -214,6 +222,7 @@ typedef NS_ENUM(NSInteger, SLSection) { SLToday, SLSettingsSection, SLDetection,
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tableView deselectRowAtIndexPath:ip animated:YES];
+    if (ip.section == SLSettingsSection && ip.row == 3) { NFFocusPresentSettings(self); return; }
     if (ip.section != SLDetection) return;
     SLCore *c = SLCore.shared;
     switch (ip.row) {

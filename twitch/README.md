@@ -19,6 +19,11 @@ Aucune app Twitch n'est contenue ni publiée ici. Pas de blocage de publicités 
   tweak ne connaît pas le geste de cette version de Twitch, le bouton laisse passer le double appui suivant à Twitch.
 - **Retard sur un direct** : si tu as au moins 10 s de retard (réglable), un bouton **« ⏩ Revenir au direct »**
   apparaît en haut à droite ; il saute au direct (lecteur Apple) ou recharge le flux (lecteur Amazon IVS).
+- **Mode focus NoteFlow** : pendant un focus NoteFlow (créneau du jour, rappel avec focus ou puce NFC), l'app
+  entière est bloquée, sans raccourci ni automatisation : un écran opaque sans bouton, le son coupé, puis le retour
+  à l'écran d'accueil, jusqu'à la fin du focus. Liaison (une fois) : dans l'app NoteFlow de l'iPhone, **Ma routine ›
+  Régler › Copier le code de liaison**, puis ouvre l'app : le code est lu dans le presse-papiers (ou réglages du
+  tweak › **Mode focus NoteFlow** › Coller le code de liaison). Le code est partagé avec `shared/NFFocus.m`.
 - **Réglages** : appui long à trois doigts → vitesse (×1,5 / ×2 / ×3), pas du double appui, seuil du bouton direct (5 à 30 s),
   partage du journal.
 

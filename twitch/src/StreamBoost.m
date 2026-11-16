@@ -7,6 +7,7 @@
 // Aucun code de Twitch ici : le tweak repère les lecteurs vidéo à l'exécution (AVPlayer d'Apple, IVSPlayer d'Amazon IVS)
 // uniquement par le runtime Objective-C, et vérifie chaque méthode avant de l'appeler.
 #import <UIKit/UIKit.h>
+#import "NFFocus.h"
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -943,6 +944,9 @@ static int SBSide(CGPoint pt, UIView *video) {
             [NSUserDefaults.standardUserDefaults setDouble:t.doubleValue forKey:SBKey("threshold")];
         }]];
     }
+    // Blocage de toute l'app pendant un focus NoteFlow (shared/NFFocus.m)
+    [a addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Mode focus NoteFlow : %@", NFFocusStatus()]
+                                          style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { NFFocusPresentSettings(top); }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Partager le journal" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         NSURL *url = [NSURL fileURLWithPath:SBLogPath()];
         UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];

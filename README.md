@@ -25,6 +25,11 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
   par-dessus affiche le temps restant et le tweak tente de quitter les Shorts tout seul (fermer l'écran, revenir en
   arrière, toucher le premier onglet de la barre du bas). La barre d'onglets du bas reste accessible : le reste de
   YouTube (vidéos, recherche, abonnements) reste utilisable.
+- **Mode focus NoteFlow** : pendant un focus NoteFlow (créneau du jour, rappel avec focus ou puce NFC), l'app
+  entière est bloquée, sans raccourci ni automatisation : un écran opaque sans bouton, le son coupé, puis le retour
+  à l'écran d'accueil, jusqu'à la fin du focus. Liaison (une fois) : dans l'app NoteFlow de l'iPhone, **Ma routine ›
+  Régler › Copier le code de liaison**, puis ouvre l'app : le code est lu dans le presse-papiers (ou réglages du
+  tweak › **Mode focus NoteFlow** › Coller le code de liaison). Le code est partagé avec `shared/NFFocus.m`.
 - **Réglages et statistiques du jour** : rubrique **Shorts Limiter** (logo Shorts) dans les **Paramètres de YouTube**,
   avec les cellules et sélecteurs de YouTube (limite, durée de pause, compteur). Historique et détection avancée :
   dernière ligne de la rubrique, appui long à trois doigts n'importe où, ou toucher le compteur. Tout est enregistré (NSUserDefaults) et survit à la fermeture de l'app.
