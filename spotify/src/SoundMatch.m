@@ -297,6 +297,8 @@ static const SMStep SMSteps[] = {
 };
 static const int SMStepCount = sizeof(SMSteps) / sizeof(SMSteps[0]);
 
+static void SMDiscoverSpotifyEqualizer(void);
+
 #pragma mark Interface
 
 @interface SMWindow : UIWindow
