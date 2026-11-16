@@ -13,7 +13,8 @@ pas de blocage de publicités ni de fonction payante débloquée ; rien n'est en
    plus et moins sur une zone — basses, aigus, médiums, présence, voix…). Tu passes de l'une à l'autre sans couper
    la musique et tu gardes ta préférée. Les écarts sont grands au début (±6 dB) puis plus fins (±2 dB).
 4. Résultat sur les 6 bandes de l'égaliseur de Spotify (60 Hz, 150 Hz, 400 Hz, 1 kHz, 2,4 kHz, 15 kHz) :
-   **Garder et activer** l'applique dans Spotify ; tu peux aussi recopier les valeurs dans l'égaliseur de Spotify.
+   **Mettre dans l'égaliseur de Spotify** écrit le réglage dans l'égaliseur de Spotify et l'allume (l'égaliseur
+   du tweak s'efface alors). Pendant le test, l'égaliseur de Spotify est coupé, puis rétabli si tu fermes le test.
 
 Menu (bouton dans les Paramètres de Spotify, ou appui long à trois doigts) : activer / désactiver ton égaliseur, voir les réglages, remettre à plat, journal.
 

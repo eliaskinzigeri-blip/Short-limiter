@@ -7,6 +7,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 #import "SMRebind.h"
 
 #ifndef SM_VERSION
@@ -280,6 +281,92 @@ static NSString *SMDescribe(const float *g) {
     return [lines componentsJoinedByString:@"\n"];
 }
 
+static NSString *SMShortDesc(id v) {
+    NSString *d = [[[v description] componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsJoinedByString:@" "];
+    return d.length > 300 ? [[d substringToIndex:300] stringByAppendingString:@"…"] : d;
+}
+
+#pragma mark Égaliseur de Spotify (préférences et modèle SPTEqualizerModel)
+
+static NSString *const SMSpotifyValuesSuffix = @".com.spotify.feature.equalizer.values";
+static __weak id SMSpotifyModel;
+
+/// Préfixes des clés de l'égaliseur de Spotify (un par compte : « <id>.com.spotify.feature.equalizer. »).
+static NSArray<NSString *> *SMSpotifyPrefixes(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *key in NSUserDefaults.standardUserDefaults.dictionaryRepresentation.allKeys) {
+        if ([key hasSuffix:SMSpotifyValuesSuffix]) [out addObject:[key substringToIndex:key.length - @"values".length]];
+    }
+    return out;
+}
+
+static void SMHookSpotifyModel(void) {
+    Class c = NSClassFromString(@"SPTEqualizerModel");
+    if (!c) { SMLog(@"Égaliseur Spotify : modèle introuvable"); return; }
+    SEL init = @selector(initWithLocalSettings:audioDriverController:connectManager:remoteConfigurationProperties:preferences:);
+    Method m = class_getInstanceMethod(c, init);
+    if (m) {
+        id (*orig)(id, SEL, id, id, id, id, id) = (void *)method_getImplementation(m);
+        method_setImplementation(m, imp_implementationWithBlock(^id(id self, id a, id b, id c2, id d, id e) {
+            id r = orig(self, init, a, b, c2, d, e);
+            SMSpotifyModel = r;
+            return r;
+        }));
+    }
+    Method mv = class_getInstanceMethod(c, @selector(setValues:));
+    if (mv) {
+        void (*orig)(id, SEL, id) = (void *)method_getImplementation(mv);
+        method_setImplementation(mv, imp_implementationWithBlock(^(id self, id v) {
+            SMSpotifyModel = self;
+            orig(self, @selector(setValues:), v);
+        }));
+    }
+}
+
+static void SMSetSpotifyOn(BOOL on) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    for (NSString *prefix in SMSpotifyPrefixes()) [d setBool:on forKey:[prefix stringByAppendingString:@"on"]];
+    id model = SMSpotifyModel;
+    if ([model respondsToSelector:@selector(setOn:)]) ((void (*)(id, SEL, BOOL))objc_msgSend)(model, @selector(setOn:), on);
+}
+
+static BOOL SMSpotifyIsOn(void) {
+    for (NSString *prefix in SMSpotifyPrefixes())
+        if ([NSUserDefaults.standardUserDefaults boolForKey:[prefix stringByAppendingString:@"on"]]) return YES;
+    return NO;
+}
+
+/// Écrit le réglage dans l'égaliseur de Spotify (valeurs de −1 à +1 pour −12 à +12 dB) et l'allume.
+static BOOL SMApplyToSpotify(const float *g) {
+    NSMutableArray *vals = [NSMutableArray array];
+    for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSArray *prefixes = SMSpotifyPrefixes();
+    for (NSString *prefix in prefixes) {
+        [d setObject:vals forKey:[prefix stringByAppendingString:@"values"]];
+        [d setBool:YES forKey:[prefix stringByAppendingString:@"on"]];
+        [d removeObjectForKey:[prefix stringByAppendingString:@"persistedPresetName"]]; // réglage personnalisé
+    }
+    id model = SMSpotifyModel;
+    BOOL live = NO;
+    if ([model respondsToSelector:@selector(setValues:)]) {
+        @try {
+            ((void (*)(id, SEL, id))objc_msgSend)(model, @selector(setValues:), vals);
+            if ([model respondsToSelector:@selector(setOn:)]) ((void (*)(id, SEL, BOOL))objc_msgSend)(model, @selector(setOn:), YES);
+            live = YES;
+        } @catch (NSException *e) {
+            SMLog([NSString stringWithFormat:@"Égaliseur Spotify : erreur du modèle (%@)", e.reason]);
+        }
+    }
+    SMLog([NSString stringWithFormat:@"Égaliseur Spotify : réglage écrit (%lu compte(s), modèle %@) %@", (unsigned long)prefixes.count,
+           live ? @"mis à jour" : @"pas encore chargé", vals]);
+    if ([model respondsToSelector:@selector(bands)]) {
+        id bands = ((id (*)(id, SEL))objc_msgSend)(model, @selector(bands));
+        SMLog([NSString stringWithFormat:@"Égaliseur Spotify : bandes %@", SMShortDesc(bands)]);
+    }
+    return prefixes.count > 0 || live;
+}
+
 #pragma mark Étapes du test
 
 typedef struct { const char *name; int bands[3]; int count; float delta; } SMStep;
@@ -337,6 +424,7 @@ typedef NS_ENUM(NSInteger, SMMode) { SMModeIntro, SMModeStep, SMModeResult };
     float _base[SM_BANDS];      // réglage retenu jusqu'ici
     float _before[SM_BANDS];    // réglage d'avant le test (rétabli si on ferme)
     BOOL _beforeActive;
+    BOOL _spotifyWasOn;
     float _variants[3][SM_BANDS];
     int _selected;
     NSTimer *_timer;
@@ -583,6 +671,8 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     SMLoadSaved(saved);
     memcpy(_before, saved, sizeof(_before));
     _beforeActive = SMEnabled();
+    _spotifyWasOn = SMSpotifyIsOn();
+    if (_spotifyWasOn) SMSetSpotifyOn(NO); // le test s'entend sans l'égaliseur de Spotify
     float flat[SM_BANDS] = {0};
     memcpy(_base, flat, sizeof(_base));
     SMSetGains(_base, YES);
@@ -596,6 +686,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 - (void)cancelTest {
     _testing = NO;
     SMSetGains(_before, _beforeActive);
+    if (_spotifyWasOn) SMSetSpotifyOn(YES);
     SMLog(@"Test : fermé sans enregistrer");
     [self refresh];
 }
@@ -655,15 +746,18 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             }
             break;
         }
-        case SMModeResult:
+        case SMModeResult: {
             SMSave(_base);
-            [NSUserDefaults.standardUserDefaults setBool:YES forKey:SMKey("enabled")];
+            BOOL inSpotify = SMApplyToSpotify(_base);
+            // Dans Spotify : l'égaliseur du tweak s'efface (sinon les deux s'additionnent)
+            [NSUserDefaults.standardUserDefaults setBool:!inSpotify forKey:SMKey("enabled")];
             SMApplySaved();
             _testing = NO;
-            SMLog(@"Test : réglage enregistré et activé");
+            SMLog(inSpotify ? @"Test : réglage mis dans l'égaliseur de Spotify" : @"Test : égaliseur de Spotify introuvable, égaliseur SoundMatch activé");
             [self refresh];
-            [self toast:@"   Égaliseur enregistré et activé   "];
+            [self toast:inSpotify ? @"   Réglage mis dans l'égaliseur de Spotify   " : @"   Égaliseur SoundMatch activé   "];
             break;
+        }
     }
 }
 
@@ -689,8 +783,8 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             break;
         case SMModeResult:
             _title.text = @"Ton égaliseur";
-            _subtitle.text = [NSString stringWithFormat:@"%@\n\nTu peux aussi recopier ces valeurs dans l'égaliseur de Spotify.", SMDescribe(_base)];
-            [_primary setTitle:@"Garder et activer" forState:UIControlStateNormal];
+            _subtitle.text = [NSString stringWithFormat:@"%@\n\nCe réglage va être mis dans l'égaliseur de Spotify (Paramètres › Lecture › Égaliseur).", SMDescribe(_base)];
+            [_primary setTitle:@"Mettre dans l'égaliseur de Spotify" forState:UIControlStateNormal];
             break;
     }
     [self refresh];
@@ -757,6 +851,15 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         SMApplySaved();
         SMLog(enabled ? @"Égaliseur désactivé" : @"Égaliseur activé");
     }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Mettre mon réglage dans l'égaliseur de Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        float g[SM_BANDS];
+        SMLoadSaved(g);
+        if (SMApplyToSpotify(g)) {
+            [NSUserDefaults.standardUserDefaults setBool:NO forKey:SMKey("enabled")];
+            SMApplySaved();
+            [self toast:@"   Réglage mis dans l'égaliseur de Spotify   "];
+        }
+    }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Voir mes réglages" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Mon égaliseur"
             message:[NSString stringWithFormat:@"%@\n\nÀ recopier dans Spotify si tu veux : Paramètres › Lecture › Égaliseur.", savedText]
@@ -806,35 +909,10 @@ static void SMDiscoverSpotifyEqualizer(void) {
     }
     if (!found) SMLog(@"Réglage Spotify : aucune clé d'égaliseur dans les préférences");
 
-    unsigned int n = 0;
-    Class *classes = objc_copyClassList(&n);
-    int shown = 0;
-    for (unsigned int i = 0; i < n && shown < 25; i++) {
-        const char *cname = class_getName(classes[i]);
-        if (!strcasestr(cname, "equaliz") && !strcasestr(cname, "equalis")) continue;
-        shown++;
-        unsigned int mc = 0;
-        Method *ms = class_copyMethodList(classes[i], &mc);
-        NSMutableArray *names = [NSMutableArray array];
-        for (unsigned int k = 0; k < mc && names.count < 25; k++) {
-            NSString *sel = NSStringFromSelector(method_getName(ms[k]));
-            NSString *low = sel.lowercaseString;
-            if ([low containsString:@"band"] || [low containsString:@"gain"] || [low containsString:@"preset"] || [low containsString:@"enable"] ||
-                [low containsString:@"value"] || [low containsString:@"set"] || [low containsString:@"save"] || [low containsString:@"shared"])
-                [names addObject:sel];
-        }
-        free(ms);
-        unsigned int cm = 0;
-        Method *cms = class_copyMethodList(object_getClass(classes[i]), &cm);
-        for (unsigned int k = 0; k < cm && names.count < 30; k++) [names addObject:[@"+" stringByAppendingString:NSStringFromSelector(method_getName(cms[k]))]];
-        free(cms);
-        SMLog([NSString stringWithFormat:@"Classe Spotify : %s — %@", cname, [names componentsJoinedByString:@", "]]);
-    }
-    free(classes);
-    if (!shown) SMLog(@"Classe Spotify : aucune classe « Equalizer » visible (code Swift ou C++)");
 }
 
 __attribute__((constructor)) static void SMInit(void) {
     SMHookAudio();
+    SMHookSpotifyModel();
     dispatch_async(dispatch_get_main_queue(), ^{ [[SMCore shared] start]; });
 }
