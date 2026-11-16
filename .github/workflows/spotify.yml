@@ -1,0 +1,51 @@
+# Compile le tweak SoundMatch.dylib (pour l'app Spotify, arm64) avec clang et le SDK iOS d'un runner macOS.
+# Publie le .dylib dans la version « spotify-latest » (lien fixe) et une version numérotée spotify-v1.0.N.
+# Le dépôt et ses versions ne contiennent que ce tweak : aucune app Spotify n'est téléchargée ni publiée.
+name: Tweak Spotify
+
+on:
+  push:
+    branches: [main]
+    paths: ["spotify/**", ".github/workflows/spotify.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spotify-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilation
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p out
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=15.0 \
+            -dynamiclib -fobjc-arc -fmodules -O2 -Wall -Wno-deprecated-declarations \
+            -DSM_VERSION="\"1.0.$RUN\"" \
+            -framework Foundation -framework UIKit -framework AVFoundation -framework AudioToolbox \
+            -install_name @rpath/SoundMatch.dylib \
+            -o out/SoundMatch.dylib spotify/src/*.m spotify/src/*.c 2>&1 | tee build.log
+          codesign -f -s - out/SoundMatch.dylib
+          file out/SoundMatch.dylib
+
+      - name: Publication (version « spotify-latest » et version numérotée)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_number }}
+        run: |
+          NOTES="Tweak SoundMatch 1.0.$RUN (${GITHUB_SHA::7}) pour l'app Spotify. À ajouter dans l'onglet Tweaks de LiveContainer, puis bouton signature. Voir spotify/README.md."
+          gh release delete spotify-latest --yes --cleanup-tag || true
+          gh release create spotify-latest out/SoundMatch.dylib --target "$GITHUB_SHA" --title "SoundMatch pour Spotify (dernière version)" --notes "$NOTES" --latest=false
+          gh release create "spotify-v1.0.$RUN" out/SoundMatch.dylib --target "$GITHUB_SHA" \
+            --title "SoundMatch 1.0.$RUN" --notes "$NOTES" --latest=false
