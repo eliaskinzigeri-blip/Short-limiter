@@ -921,6 +921,49 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     [self showMenuFrom:top];
 }
 
+/// Six cases, une par bande (−12 à +12 dB), écrites telles quelles dans l'égaliseur de Spotify.
+- (void)askSpotifyValues {
+    static const char *names[SM_BANDS] = {"60 Hz", "150 Hz", "400 Hz", "1 kHz", "2,4 kHz", "15 kHz"};
+    NSArray *cur = nil;
+    for (NSString *prefix in SMSpotifyPrefixes()) {
+        cur = [NSUserDefaults.standardUserDefaults arrayForKey:[prefix stringByAppendingString:@"values"]];
+        if (cur.count == SM_BANDS) break;
+    }
+    UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Égaliseur Spotify"
+        message:@"Valeur de chaque bande en dB, de −12 à +12 (virgule ou point)." preferredStyle:UIAlertControllerStyleAlert];
+    for (int i = 0; i < SM_BANDS; i++) {
+        double db = cur.count == SM_BANDS ? [cur[i] doubleValue] * 12.0 : 0;
+        [v addTextFieldWithConfigurationHandler:^(UITextField *t) {
+            t.placeholder = [NSString stringWithUTF8String:names[i]];
+            t.text = [NSString stringWithFormat:@"%.1f", db];
+            t.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+            UILabel *l = [UILabel new];
+            l.text = [NSString stringWithFormat:@"%s  ", names[i]];
+            l.font = [UIFont systemFontOfSize:13];
+            l.textColor = UIColor.secondaryLabelColor;
+            [l sizeToFit];
+            t.leftView = l;
+            t.leftViewMode = UITextFieldViewModeAlways;
+        }];
+    }
+    [v addAction:[UIAlertAction actionWithTitle:@"Annuler" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakV = v;
+    [v addAction:[UIAlertAction actionWithTitle:@"Mettre dans Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSMutableArray *vals = [NSMutableArray array];
+        for (UITextField *t in weakV.textFields) {
+            NSString *txt = [[t.text stringByReplacingOccurrencesOfString:@"," withString:@"."] stringByReplacingOccurrencesOfString:@"−" withString:@"-"];
+            [vals addObject:@(fmax(-1.0, fmin(1.0, txt.doubleValue / 12.0)))];
+        }
+        if (vals.count == SM_BANDS && SMWriteSpotify(vals, nil, YES)) {
+            [NSUserDefaults.standardUserDefaults setBool:NO forKey:SMKey("enabled")];
+            SMApplySaved();
+            SMLog([NSString stringWithFormat:@"Égaliseur Spotify : valeurs saisies %@", vals]);
+            [self toast:@"   Valeurs mises dans l'égaliseur de Spotify   "];
+        }
+    }]];
+    [self present:v from:[self topController]];
+}
+
 - (void)showMenuFrom:(UIViewController *)top {
     if (_testing || [top isKindOfClass:UIAlertController.class]) return;
     float saved[SM_BANDS];
@@ -963,6 +1006,9 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             }
         }]];
     }
+    [a addAction:[UIAlertAction actionWithTitle:@"Saisir les valeurs de l'égaliseur Spotify (dB)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        [self askSpotifyValues];
+    }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Voir mes réglages" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Mon égaliseur"
             message:[NSString stringWithFormat:@"%@\n\nÀ recopier dans Spotify si tu veux : Paramètres › Lecture › Égaliseur.", savedText]
