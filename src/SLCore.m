@@ -1,4 +1,5 @@
 #import "SL.h"
+#import "NFFocus.h"
 
 #define SLKey(x) (@"ShortLimiter." x)
 
@@ -308,7 +309,7 @@ static NSDate *SLNextMidnight(void) {
     [nc addObserver:self selector:@selector(tick) name:UIApplicationDidBecomeActiveNotification object:nil];
     // Preuve que le tweak est chargé
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[SLOverlay shared] toast:@"ShortLimiter actif · appui long à 3 doigts : réglages"];
+        [[SLOverlay shared] toast:[NSString stringWithFormat:@"ShortLimiter %s actif · focus NoteFlow : %@", SL_VERSION, NFFocusStatus().lowercaseString]];
     });
 }
 
