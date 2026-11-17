@@ -680,11 +680,21 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             [_seenScreens addObject:n];
             SMLog([NSString stringWithFormat:@"Écran vu : %@", n]);
         }
-        NSString *low = n.lowercaseString;
-        if ([low containsString:@"setting"] || [low containsString:@"playback"] || [low containsString:@"equaliz"] || [low containsString:@"preference"])
-            found = YES;
     }
-    return found;
+    // Seulement si l'écran au premier plan est celui des paramètres : on regarde les contrôleurs de la vue
+    // au milieu de l'écran (sinon le bouton restait visible par-dessus le lecteur ouvert sur les paramètres).
+    for (UIWindow *w in [self appWindows]) {
+        if (!w.isKeyWindow) continue;
+        UIView *hit = [w hitTest:CGPointMake(CGRectGetMidX(w.bounds), w.bounds.size.height * 0.4) withEvent:nil];
+        for (UIResponder *r = hit; r; r = r.nextResponder) {
+            if (![r isKindOfClass:UIViewController.class]) continue;
+            NSString *low = NSStringFromClass(r.class).lowercaseString;
+            if ([low containsString:@"nowplaying"] || [low containsString:@"player"]) return NO;
+            if ([low containsString:@"setting"] || [low containsString:@"equaliz"] || [low containsString:@"preference"]) found = YES;
+        }
+        return found;
+    }
+    return NO;
 }
 
 - (void)openMenu {
