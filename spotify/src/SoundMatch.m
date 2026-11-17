@@ -66,7 +66,6 @@ typedef struct {
 static float gGains[SM_BANDS];          // gains appliqués (dB)
 static volatile int gVersion = 1;       // change à chaque nouveau réglage
 static volatile int gActive = 0;        // égaliseur appliqué (test en cours ou réglage activé)
-static volatile float gHeadroom = -1;   // pendant le test : réduction fixe (dB) commune aux 3 versions
 static volatile double gLastRender = 0; // dernier passage du son (CFAbsoluteTime)
 
 static void SMSetGains(const float *g, BOOL active) {
@@ -109,10 +108,25 @@ static void SMDesign(SMUnit *u) {
         }
         u->bq[i] = (SMBiquad){(float)(b0 / a0), (float)(b1 / a0), (float)(b2 / a0), (float)(a1 / a0), (float)(a2 / a0)};
     }
-    // Pendant le test, les trois versions gardent le même volume de base : celle qui monte une
-    // bande sonne plus fort, comme dans l'égaliseur de Spotify (sinon le test pousse vers le plat).
-    float room = gHeadroom >= 0 ? gHeadroom : maxGain * 0.5f;
-    u->pre = (float)pow(10.0, -room / 20.0);
+    // Même volume ressenti pour toutes les versions : on mesure le gain moyen de la courbe (par tiers d'octave,
+    // de 40 Hz à 16 kHz) et on le compense. Sinon la version la plus forte gagne toujours, et le test pousse
+    // les basses jusqu'à saturer.
+    double sum = 0; int n = 0;
+    for (double f = 40; f <= 16000; f *= 1.2599, n++) {
+        double w = 2.0 * M_PI * fmin(f, fs * 0.45) / fs;
+        double cr = cos(w), ci = -sin(w), c2r = cos(2 * w), c2i = -sin(2 * w);
+        double power = 1;
+        for (int i = 0; i < SM_BANDS; i++) {
+            SMBiquad q = u->bq[i];
+            double nr = q.b0 + q.b1 * cr + q.b2 * c2r, ni = q.b1 * ci + q.b2 * c2i;
+            double dr = 1 + q.a1 * cr + q.a2 * c2r, di = q.a1 * ci + q.a2 * c2i;
+            power *= (nr * nr + ni * ni) / fmax(1e-12, dr * dr + di * di);
+        }
+        sum += power;
+    }
+    double avg = n ? sum / n : 1;
+    u->pre = (float)(1.0 / sqrt(fmax(avg, 1e-6)));
+    (void)maxGain;
     u->version = gVersion;
 }
 
@@ -343,16 +357,29 @@ static BOOL SMSpotifyIsOn(void) {
     return NO;
 }
 
-/// Écrit le réglage dans l'égaliseur de Spotify (valeurs de −1 à +1 pour −12 à +12 dB) et l'allume.
-static BOOL SMApplyToSpotify(const float *g) {
-    NSMutableArray *vals = [NSMutableArray array];
-    for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
+/// Écrit des valeurs (−1 à +1 pour −12 à +12 dB) dans l'égaliseur de Spotify et l'allume. Avant, la courbe en place
+/// est gardée de côté (« Remettre mon ancien égaliseur Spotify »).
+static BOOL SMWriteSpotify(NSArray *vals, NSString *preset, BOOL backup) {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     NSArray *prefixes = SMSpotifyPrefixes();
+    if (backup) {
+        for (NSString *prefix in prefixes) {
+            NSArray *old = [d arrayForKey:[prefix stringByAppendingString:@"values"]];
+            if (old.count && ![old isEqualToArray:vals]) {
+                NSMutableDictionary *b = [NSMutableDictionary dictionaryWithObject:old forKey:@"values"];
+                NSString *oldPreset = [d stringForKey:[prefix stringByAppendingString:@"persistedPresetName"]];
+                if (oldPreset) b[@"preset"] = oldPreset;
+                [d setObject:b forKey:SMKey("spotifyBackup")];
+                SMLog([NSString stringWithFormat:@"Égaliseur Spotify : ancienne courbe gardée %@", old]);
+                break;
+            }
+        }
+    }
     for (NSString *prefix in prefixes) {
         [d setObject:vals forKey:[prefix stringByAppendingString:@"values"]];
         [d setBool:YES forKey:[prefix stringByAppendingString:@"on"]];
-        [d removeObjectForKey:[prefix stringByAppendingString:@"persistedPresetName"]]; // réglage personnalisé
+        if (preset) [d setObject:preset forKey:[prefix stringByAppendingString:@"persistedPresetName"]];
+        else [d removeObjectForKey:[prefix stringByAppendingString:@"persistedPresetName"]]; // réglage personnalisé
     }
     id model = SMSpotifyModel;
     BOOL live = NO;
@@ -372,6 +399,33 @@ static BOOL SMApplyToSpotify(const float *g) {
         SMLog([NSString stringWithFormat:@"Égaliseur Spotify : bandes %@", SMShortDesc(bands)]);
     }
     return prefixes.count > 0 || live;
+}
+
+/// Courbe de Spotify d'avant le premier passage de SoundMatch, retrouvée dans le journal (lignes « Réglage Spotify »
+/// notées au lancement, avant la première écriture).
+static NSArray *SMJournalSpotifyValues(void) {
+    NSString *text = [NSString stringWithContentsOfFile:SMLogPath() encoding:NSUTF8StringEncoding error:nil];
+    if (!text) return nil;
+    NSRegularExpression *num = [NSRegularExpression regularExpressionWithPattern:@"-?[0-9]+(\\.[0-9]+)?(e-?[0-9]+)?" options:0 error:nil];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if ([line containsString:@"Égaliseur Spotify : réglage écrit"]) return nil; // déjà écrasée à ce moment-là
+        if (![line containsString:@"Réglage Spotify : "] || ![line containsString:@"equalizer.values = ("]) continue;
+        NSRange open = [line rangeOfString:@"equalizer.values = ("];
+        NSRange close = [line rangeOfString:@")" options:0 range:NSMakeRange(NSMaxRange(open), line.length - NSMaxRange(open))];
+        if (close.location == NSNotFound) continue;
+        NSString *inner = [line substringWithRange:NSMakeRange(NSMaxRange(open), close.location - NSMaxRange(open))];
+        NSMutableArray *vals = [NSMutableArray array];
+        for (NSTextCheckingResult *m in [num matchesInString:inner options:0 range:NSMakeRange(0, inner.length)])
+            [vals addObject:@(fmax(-1.0, fmin(1.0, [inner substringWithRange:m.range].doubleValue)))];
+        if (vals.count == SM_BANDS) return vals;
+    }
+    return nil;
+}
+
+static BOOL SMApplyToSpotify(const float *g) {
+    NSMutableArray *vals = [NSMutableArray array];
+    for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
+    return SMWriteSpotify(vals, nil, YES);
 }
 
 #pragma mark Étapes du test
@@ -598,9 +652,6 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     });
     _timer = [NSTimer timerWithTimeInterval:1 target:self selector:@selector(tick) userInfo:nil repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self toast:@"   SoundMatch actif · appui long à 3 doigts   "];
-    });
 }
 
 - (void)toast:(NSString *)text {
@@ -629,11 +680,21 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             [_seenScreens addObject:n];
             SMLog([NSString stringWithFormat:@"Écran vu : %@", n]);
         }
-        NSString *low = n.lowercaseString;
-        if ([low containsString:@"setting"] || [low containsString:@"playback"] || [low containsString:@"equaliz"] || [low containsString:@"preference"])
-            found = YES;
     }
-    return found;
+    // Seulement si l'écran au premier plan est celui des paramètres : on regarde les contrôleurs de la vue
+    // au milieu de l'écran (sinon le bouton restait visible par-dessus le lecteur ouvert sur les paramètres).
+    for (UIWindow *w in [self appWindows]) {
+        if (!w.isKeyWindow) continue;
+        UIView *hit = [w hitTest:CGPointMake(CGRectGetMidX(w.bounds), w.bounds.size.height * 0.4) withEvent:nil];
+        for (UIResponder *r = hit; r; r = r.nextResponder) {
+            if (![r isKindOfClass:UIViewController.class]) continue;
+            NSString *low = NSStringFromClass(r.class).lowercaseString;
+            if ([low containsString:@"nowplaying"] || [low containsString:@"player"]) return NO;
+            if ([low containsString:@"setting"] || [low containsString:@"equaliz"] || [low containsString:@"preference"]) found = YES;
+        }
+        return found;
+    }
+    return NO;
 }
 
 - (void)openMenu {
@@ -658,7 +719,8 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     }
     if (![self ensureWindow]) return;
     _toast.hidden = !toast;
-    _settingsButton.hidden = !_inSettings || _testing;
+    BOOL menuOpen = [[self topController] isKindOfClass:UIAlertController.class]; // ne pas cacher le menu
+    _settingsButton.hidden = !_inSettings || _testing || menuOpen;
     _card.hidden = !_testing;
     if (_testing) {
         BOOL sound = CFAbsoluteTimeGetCurrent() - gLastRender < 1.5;
@@ -694,7 +756,6 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 
 - (void)cancelTest {
     _testing = NO;
-    gHeadroom = -1;
     SMSetGains(_before, _beforeActive);
     if (_spotifyWasOn) SMSetSpotifyOn(YES);
     SMLog(@"Test : fermé sans enregistrer");
@@ -721,9 +782,6 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         plus[b] = fminf(12, _base[b] + s.delta);
         minus[b] = fmaxf(-12, _base[b] - s.delta);
     }
-    float top = 0;
-    for (int i = 0; i < SM_BANDS; i++) top = fmaxf(top, fmaxf(plus[i], _base[i]));
-    gHeadroom = top * 0.5f;
     float *versions[3] = {_base, plus, minus};
     int order[3] = {0, 1, 2};
     for (int i = 2; i > 0; i--) { int j = arc4random_uniform(i + 1); int t = order[i]; order[i] = order[j]; order[j] = t; }
@@ -758,15 +816,21 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             // Si on a choisi plus (ou moins), on recommence l'étape pour aller plus loin, jusqu'à ±12 dB
             BOOL atLimit = NO;
             for (int k = 0; k < cur.count; k++) if (fabsf(_base[cur.bands[k]]) >= 12) atLimit = YES;
-            if (dir != 0 && !atLimit && _repeat < 4) {
+            if (dir != 0 && !atLimit && _repeat < 2) {
                 _repeat++;
                 [self prepareStep];
                 break;
             }
             _repeat = 0;
             if (++_step >= SMStepCount) {
-                gHeadroom = -1;
                 _mode = SMModeResult;
+                // Courbe abaissée d'un bloc si une bande dépasse +4 dB : même forme, sans saturation
+                float top = -99;
+                for (int i = 0; i < SM_BANDS; i++) top = fmaxf(top, _base[i]);
+                if (top > 4) {
+                    for (int i = 0; i < SM_BANDS; i++) _base[i] = fmaxf(-12, roundf(_base[i] - (top - 4)));
+                    SMLog([NSString stringWithFormat:@"Test : courbe abaissée de %.0f dB pour éviter la saturation", top - 4]);
+                }
                 SMSetGains(_base, YES);
                 SMLog([NSString stringWithFormat:@"Test : résultat\n%@", SMDescribe(_base)]);
                 [self render];
@@ -864,6 +928,49 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     [self showMenuFrom:top];
 }
 
+/// Six cases, une par bande (−12 à +12 dB), écrites telles quelles dans l'égaliseur de Spotify.
+- (void)askSpotifyValues {
+    static const char *names[SM_BANDS] = {"60 Hz", "150 Hz", "400 Hz", "1 kHz", "2,4 kHz", "15 kHz"};
+    NSArray *cur = nil;
+    for (NSString *prefix in SMSpotifyPrefixes()) {
+        cur = [NSUserDefaults.standardUserDefaults arrayForKey:[prefix stringByAppendingString:@"values"]];
+        if (cur.count == SM_BANDS) break;
+    }
+    UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Égaliseur Spotify"
+        message:@"Valeur de chaque bande en dB, de −12 à +12 (virgule ou point)." preferredStyle:UIAlertControllerStyleAlert];
+    for (int i = 0; i < SM_BANDS; i++) {
+        double db = cur.count == SM_BANDS ? [cur[i] doubleValue] * 12.0 : 0;
+        [v addTextFieldWithConfigurationHandler:^(UITextField *t) {
+            t.placeholder = [NSString stringWithUTF8String:names[i]];
+            t.text = [NSString stringWithFormat:@"%.1f", db];
+            t.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+            UILabel *l = [UILabel new];
+            l.text = [NSString stringWithFormat:@"%s  ", names[i]];
+            l.font = [UIFont systemFontOfSize:13];
+            l.textColor = UIColor.secondaryLabelColor;
+            [l sizeToFit];
+            t.leftView = l;
+            t.leftViewMode = UITextFieldViewModeAlways;
+        }];
+    }
+    [v addAction:[UIAlertAction actionWithTitle:@"Annuler" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakV = v;
+    [v addAction:[UIAlertAction actionWithTitle:@"Mettre dans Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSMutableArray *vals = [NSMutableArray array];
+        for (UITextField *t in weakV.textFields) {
+            NSString *txt = [[t.text stringByReplacingOccurrencesOfString:@"," withString:@"."] stringByReplacingOccurrencesOfString:@"−" withString:@"-"];
+            [vals addObject:@(fmax(-1.0, fmin(1.0, txt.doubleValue / 12.0)))];
+        }
+        if (vals.count == SM_BANDS && SMWriteSpotify(vals, nil, YES)) {
+            [NSUserDefaults.standardUserDefaults setBool:NO forKey:SMKey("enabled")];
+            SMApplySaved();
+            SMLog([NSString stringWithFormat:@"Égaliseur Spotify : valeurs saisies %@", vals]);
+            [self toast:@"   Valeurs mises dans l'égaliseur de Spotify   "];
+        }
+    }]];
+    [self present:v from:[self topController]];
+}
+
 - (void)showMenuFrom:(UIViewController *)top {
     if (_testing || [top isKindOfClass:UIAlertController.class]) return;
     float saved[SM_BANDS];
@@ -890,6 +997,24 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             SMApplySaved();
             [self toast:@"   Réglage mis dans l'égaliseur de Spotify   "];
         }
+    }]];
+    NSDictionary *backup = [NSUserDefaults.standardUserDefaults dictionaryForKey:SMKey("spotifyBackup")];
+    if (![backup[@"values"] isKindOfClass:NSArray.class]) {
+        NSArray *fromJournal = SMJournalSpotifyValues();
+        if (fromJournal) backup = @{@"values": fromJournal};
+    }
+    if ([backup[@"values"] isKindOfClass:NSArray.class]) {
+        [a addAction:[UIAlertAction actionWithTitle:@"Remettre mon ancien égaliseur Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            if (SMWriteSpotify(backup[@"values"], backup[@"preset"], NO)) {
+                [NSUserDefaults.standardUserDefaults setBool:NO forKey:SMKey("enabled")];
+                SMApplySaved();
+                SMLog(@"Égaliseur Spotify : ancienne courbe remise");
+                [self toast:@"   Ancien égaliseur Spotify remis   "];
+            }
+        }]];
+    }
+    [a addAction:[UIAlertAction actionWithTitle:@"Saisir les valeurs de l'égaliseur Spotify (dB)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        [self askSpotifyValues];
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Voir mes réglages" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Mon égaliseur"
