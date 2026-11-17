@@ -357,16 +357,29 @@ static BOOL SMSpotifyIsOn(void) {
     return NO;
 }
 
-/// Écrit le réglage dans l'égaliseur de Spotify (valeurs de −1 à +1 pour −12 à +12 dB) et l'allume.
-static BOOL SMApplyToSpotify(const float *g) {
-    NSMutableArray *vals = [NSMutableArray array];
-    for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
+/// Écrit des valeurs (−1 à +1 pour −12 à +12 dB) dans l'égaliseur de Spotify et l'allume. Avant, la courbe en place
+/// est gardée de côté (« Remettre mon ancien égaliseur Spotify »).
+static BOOL SMWriteSpotify(NSArray *vals, NSString *preset, BOOL backup) {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     NSArray *prefixes = SMSpotifyPrefixes();
+    if (backup) {
+        for (NSString *prefix in prefixes) {
+            NSArray *old = [d arrayForKey:[prefix stringByAppendingString:@"values"]];
+            if (old.count && ![old isEqualToArray:vals]) {
+                NSMutableDictionary *b = [NSMutableDictionary dictionaryWithObject:old forKey:@"values"];
+                NSString *oldPreset = [d stringForKey:[prefix stringByAppendingString:@"persistedPresetName"]];
+                if (oldPreset) b[@"preset"] = oldPreset;
+                [d setObject:b forKey:SMKey("spotifyBackup")];
+                SMLog([NSString stringWithFormat:@"Égaliseur Spotify : ancienne courbe gardée %@", old]);
+                break;
+            }
+        }
+    }
     for (NSString *prefix in prefixes) {
         [d setObject:vals forKey:[prefix stringByAppendingString:@"values"]];
         [d setBool:YES forKey:[prefix stringByAppendingString:@"on"]];
-        [d removeObjectForKey:[prefix stringByAppendingString:@"persistedPresetName"]]; // réglage personnalisé
+        if (preset) [d setObject:preset forKey:[prefix stringByAppendingString:@"persistedPresetName"]];
+        else [d removeObjectForKey:[prefix stringByAppendingString:@"persistedPresetName"]]; // réglage personnalisé
     }
     id model = SMSpotifyModel;
     BOOL live = NO;
@@ -386,6 +399,12 @@ static BOOL SMApplyToSpotify(const float *g) {
         SMLog([NSString stringWithFormat:@"Égaliseur Spotify : bandes %@", SMShortDesc(bands)]);
     }
     return prefixes.count > 0 || live;
+}
+
+static BOOL SMApplyToSpotify(const float *g) {
+    NSMutableArray *vals = [NSMutableArray array];
+    for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
+    return SMWriteSpotify(vals, nil, YES);
 }
 
 #pragma mark Étapes du test
@@ -907,6 +926,17 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             [self toast:@"   Réglage mis dans l'égaliseur de Spotify   "];
         }
     }]];
+    NSDictionary *backup = [NSUserDefaults.standardUserDefaults dictionaryForKey:SMKey("spotifyBackup")];
+    if ([backup[@"values"] isKindOfClass:NSArray.class]) {
+        [a addAction:[UIAlertAction actionWithTitle:@"Remettre mon ancien égaliseur Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            if (SMWriteSpotify(backup[@"values"], backup[@"preset"], NO)) {
+                [NSUserDefaults.standardUserDefaults setBool:NO forKey:SMKey("enabled")];
+                SMApplySaved();
+                SMLog(@"Égaliseur Spotify : ancienne courbe remise");
+                [self toast:@"   Ancien égaliseur Spotify remis   "];
+            }
+        }]];
+    }
     [a addAction:[UIAlertAction actionWithTitle:@"Voir mes réglages" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIAlertController *v = [UIAlertController alertControllerWithTitle:@"Mon égaliseur"
             message:[NSString stringWithFormat:@"%@\n\nÀ recopier dans Spotify si tu veux : Paramètres › Lecture › Égaliseur.", savedText]
