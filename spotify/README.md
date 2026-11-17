@@ -31,7 +31,7 @@ fonctions audio sont interceptées en réécrivant les tables d'import (principe
 
 1. Télécharge https://github.com/eliaskinzigeri-blip/short-limiter/releases/download/spotify-latest/SoundMatch.dylib
 2. LiveContainer → onglet **Tweaks** → **+** → ajoute `SoundMatch.dylib`, puis touche le bouton **signature**.
-3. Lance Spotify **depuis LiveContainer** : le bandeau vert « SoundMatch actif » apparaît.
+3. Lance Spotify **depuis LiveContainer** : le bouton vert « SoundMatch » apparaît dans Paramètres › Lecture.
 
 Si « Son de Spotify détecté » n'apparaît pas pendant le test alors que la musique joue, envoie le journal
 (menu → Partager le journal) : il indique si la sortie audio de Spotify a été trouvée et son format.
