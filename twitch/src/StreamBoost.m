@@ -363,6 +363,52 @@ static id SBPlayerInView(UIView *v, int depth) {
     return nil;
 }
 
+/// Vue qui ressemble à une vidéo (secours si le lecteur lui-même est introuvable, par exemple après une mise à jour
+/// de Twitch) : couche vidéo, ou nom de classe avec player / video / stream, hors chat.
+static BOOL SBLooksLikeVideo(UIView *v) {
+    NSString *low = NSStringFromClass(v.class).lowercaseString;
+    if ([low containsString:@"chat"] || [low containsString:@"comment"] || [low containsString:@"cell"] || [low containsString:@"thumbnail"]) return NO;
+    if ([low containsString:@"player"] || [low containsString:@"video"] || [low containsString:@"stream"]) return YES;
+    CALayer *l = v.layer;
+    return [l isKindOfClass:AVPlayerLayer.class] || [NSStringFromClass(l.class) containsString:@"SampleBufferDisplay"] ||
+           [NSStringFromClass(l.class) containsString:@"Metal"];
+}
+
+static CGFloat SBShare(UIView *v, UIWindow *w) {
+    CGRect r = CGRectIntersection([v convertRect:v.bounds toView:nil], w.bounds);
+    if (CGRectIsNull(r)) return 0;
+    return (r.size.width * r.size.height) / MAX(1, w.bounds.size.width * w.bounds.size.height);
+}
+
+/// Vue vidéo sous le doigt, sans passer par le lecteur.
+static UIView *SBVideoViewAtPoint(UIWindow *w, CGPoint pt) {
+    UIView *hit = [w hitTest:pt withEvent:nil];
+    for (UIView *v = hit; v && v != w; v = v.superview) {
+        NSString *low = NSStringFromClass(v.class).lowercaseString;
+        if ([low containsString:@"chat"] || [low containsString:@"comment"]) return nil;
+        if (SBLooksLikeVideo(v) && SBShare(v, w) >= 0.25) return v;
+        // couche vidéo juste en dessous de la vue touchée (vue de commandes posée par-dessus)
+        for (UIView *sub in v.subviews) {
+            if (SBLooksLikeVideo(sub) && SBShare(sub, w) >= 0.25 && CGRectContainsPoint([sub convertRect:sub.bounds toView:nil], pt)) return sub;
+        }
+        if (v.bounds.size.height > w.bounds.size.height * 0.95 && v.bounds.size.width > w.bounds.size.width * 0.95) break;
+    }
+    return nil;
+}
+
+/// Grande vue vidéo à l'écran (au moins la moitié de la fenêtre).
+static UIView *SBBigVideoView(UIWindow *w) {
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
+    int seen = 0;
+    while (stack.count && seen < 4000) {
+        UIView *v = stack.lastObject; [stack removeLastObject]; seen++;
+        if (v.hidden || v.alpha < 0.05) continue;
+        if (v != w && SBLooksLikeVideo(v) && SBShare(v, w) >= 0.5) return v;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
 /// Lecteur sous le doigt : on remonte depuis la vue touchée tant qu'elle reste à peu près de la taille de la vidéo.
 static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **videoView) {
     UIView *hit = [w hitTest:pt withEvent:nil];
@@ -427,6 +473,8 @@ static id SBPlayerAtPoint(UIWindow *w, CGPoint pt, NSString **chain, UIView **vi
     UIButton *_chatButton;
     NSDate *_lastScan;
     BOOL _probeFired;
+    NSDate *_lastVideoScan;
+    BOOL _videoOnScreen;
     NSDate *_passUntil;   // bouton Chat sans geste connu : les doubles appuis passent à Twitch jusqu'à cette date
 }
 
@@ -594,8 +642,18 @@ static int SBSide(CGPoint pt, UIView *video) {
         if ([v isKindOfClass:UIControl.class] && ![NSStringFromClass(v.class).lowercaseString containsString:@"player"]) return NO;
     }
     UIView *video = nil;
-    id p = SBPlayerAtPoint(w, pt, NULL, &video);
-    if (!p || !video) return NO;
+    NSString *chain = nil;
+    id p = SBPlayerAtPoint(w, pt, &chain, &video);
+    if (!p || !video) {
+        video = SBVideoViewAtPoint(w, pt);
+        if (!video) {
+            SBLogOnce([NSString stringWithFormat:@"noswallow-%@", NSStringFromClass(hit.class)],
+                      [NSString stringWithFormat:@"Double appui non bloqué (pas de vidéo trouvée) : %@", chain]);
+            return NO;
+        }
+        SBLogOnce([NSString stringWithFormat:@"fallback-%@", NSStringFromClass(video.class)],
+                  [NSString stringWithFormat:@"Double appui bloqué grâce à la vue vidéo %@ (lecteur introuvable)", NSStringFromClass(video.class)]);
+    }
     [self linkAppDoubleTapsFrom:hit]; // gestes de Twitch sous le doigt, pour le bouton Chat
     return YES;
 }
@@ -604,7 +662,13 @@ static int SBSide(CGPoint pt, UIView *video) {
     CGPoint pt = [t locationInView:w];
     UIView *video = nil;
     id p = SBPlayerAtPoint(w, pt, NULL, &video);
-    if (!p || !video) return;
+    if (!p || !video) {
+        // Lecteur introuvable : on prend le lecteur principal connu, s'il y en a un
+        video = SBVideoViewAtPoint(w, pt);
+        p = _livePlayer;
+        if (!p) for (id q in SBPlayers.allObjects) if (SBIsPlaying(q)) { p = q; break; }
+        if (!p || !video) return;
+    }
     int side = SBSide(pt, video);
     SBLogOnce(@"swallow", @"Double appui intercepté avant Twitch (le chat ne s'ouvre plus par double appui)");
     if (side != 0) [self seekSide:side player:p video:video];
@@ -871,9 +935,22 @@ static int SBSide(CGPoint pt, UIView *video) {
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
     UIWindowScene *scene = SBScene();
     if (!scene || !UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) return NO;
-    BOOL playing = NO;
-    for (id p in SBPlayers.allObjects) if (SBIsPlaying(p)) { playing = YES; break; }
-    return playing;
+    for (id p in SBPlayers.allObjects) if (SBIsPlaying(p)) return YES;
+    // Lecteur introuvable (nouvelle version de Twitch) : une grande vue vidéo à l'écran suffit
+    if (_lastVideoScan && -_lastVideoScan.timeIntervalSinceNow < 1) return _videoOnScreen;
+    _lastVideoScan = NSDate.date;
+    _videoOnScreen = NO;
+    for (UIWindow *w in [self appWindows]) {
+        UIView *v = SBBigVideoView(w);
+        if (v) {
+            _videoOnScreen = YES;
+            SBLogOnce([NSString stringWithFormat:@"bigvideo-%@", NSStringFromClass(v.class)],
+                      [NSString stringWithFormat:@"Bouton Chat : vidéo reconnue par sa vue %@ (aucun lecteur en lecture connu, %lu lecteur(s) vu(s))",
+                       NSStringFromClass(v.class), (unsigned long)SBPlayers.allObjects.count]);
+            break;
+        }
+    }
+    return _videoOnScreen;
 }
 
 - (void)refreshWithLatency:(double)latency {
