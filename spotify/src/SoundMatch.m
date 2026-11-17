@@ -66,7 +66,6 @@ typedef struct {
 static float gGains[SM_BANDS];          // gains appliqués (dB)
 static volatile int gVersion = 1;       // change à chaque nouveau réglage
 static volatile int gActive = 0;        // égaliseur appliqué (test en cours ou réglage activé)
-static volatile float gHeadroom = -1;   // pendant le test : réduction fixe (dB) commune aux 3 versions
 static volatile double gLastRender = 0; // dernier passage du son (CFAbsoluteTime)
 
 static void SMSetGains(const float *g, BOOL active) {
@@ -109,10 +108,25 @@ static void SMDesign(SMUnit *u) {
         }
         u->bq[i] = (SMBiquad){(float)(b0 / a0), (float)(b1 / a0), (float)(b2 / a0), (float)(a1 / a0), (float)(a2 / a0)};
     }
-    // Pendant le test, les trois versions gardent le même volume de base : celle qui monte une
-    // bande sonne plus fort, comme dans l'égaliseur de Spotify (sinon le test pousse vers le plat).
-    float room = gHeadroom >= 0 ? gHeadroom : maxGain * 0.5f;
-    u->pre = (float)pow(10.0, -room / 20.0);
+    // Même volume ressenti pour toutes les versions : on mesure le gain moyen de la courbe (par tiers d'octave,
+    // de 40 Hz à 16 kHz) et on le compense. Sinon la version la plus forte gagne toujours, et le test pousse
+    // les basses jusqu'à saturer.
+    double sum = 0; int n = 0;
+    for (double f = 40; f <= 16000; f *= 1.2599, n++) {
+        double w = 2.0 * M_PI * fmin(f, fs * 0.45) / fs;
+        double cr = cos(w), ci = -sin(w), c2r = cos(2 * w), c2i = -sin(2 * w);
+        double power = 1;
+        for (int i = 0; i < SM_BANDS; i++) {
+            SMBiquad q = u->bq[i];
+            double nr = q.b0 + q.b1 * cr + q.b2 * c2r, ni = q.b1 * ci + q.b2 * c2i;
+            double dr = 1 + q.a1 * cr + q.a2 * c2r, di = q.a1 * ci + q.a2 * c2i;
+            power *= (nr * nr + ni * ni) / fmax(1e-12, dr * dr + di * di);
+        }
+        sum += power;
+    }
+    double avg = n ? sum / n : 1;
+    u->pre = (float)(1.0 / sqrt(fmax(avg, 1e-6)));
+    (void)maxGain;
     u->version = gVersion;
 }
 
@@ -694,7 +708,6 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 
 - (void)cancelTest {
     _testing = NO;
-    gHeadroom = -1;
     SMSetGains(_before, _beforeActive);
     if (_spotifyWasOn) SMSetSpotifyOn(YES);
     SMLog(@"Test : fermé sans enregistrer");
@@ -721,9 +734,6 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         plus[b] = fminf(12, _base[b] + s.delta);
         minus[b] = fmaxf(-12, _base[b] - s.delta);
     }
-    float top = 0;
-    for (int i = 0; i < SM_BANDS; i++) top = fmaxf(top, fmaxf(plus[i], _base[i]));
-    gHeadroom = top * 0.5f;
     float *versions[3] = {_base, plus, minus};
     int order[3] = {0, 1, 2};
     for (int i = 2; i > 0; i--) { int j = arc4random_uniform(i + 1); int t = order[i]; order[i] = order[j]; order[j] = t; }
@@ -758,15 +768,21 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             // Si on a choisi plus (ou moins), on recommence l'étape pour aller plus loin, jusqu'à ±12 dB
             BOOL atLimit = NO;
             for (int k = 0; k < cur.count; k++) if (fabsf(_base[cur.bands[k]]) >= 12) atLimit = YES;
-            if (dir != 0 && !atLimit && _repeat < 4) {
+            if (dir != 0 && !atLimit && _repeat < 2) {
                 _repeat++;
                 [self prepareStep];
                 break;
             }
             _repeat = 0;
             if (++_step >= SMStepCount) {
-                gHeadroom = -1;
                 _mode = SMModeResult;
+                // Courbe abaissée d'un bloc si une bande dépasse +4 dB : même forme, sans saturation
+                float top = -99;
+                for (int i = 0; i < SM_BANDS; i++) top = fmaxf(top, _base[i]);
+                if (top > 4) {
+                    for (int i = 0; i < SM_BANDS; i++) _base[i] = fmaxf(-12, roundf(_base[i] - (top - 4)));
+                    SMLog([NSString stringWithFormat:@"Test : courbe abaissée de %.0f dB pour éviter la saturation", top - 4]);
+                }
                 SMSetGains(_base, YES);
                 SMLog([NSString stringWithFormat:@"Test : résultat\n%@", SMDescribe(_base)]);
                 [self render];
