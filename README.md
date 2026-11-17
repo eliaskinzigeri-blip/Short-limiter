@@ -49,7 +49,7 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
 5. Toujours dans l'onglet **Tweaks**, touche le bouton **signature** (à gauche du +) : il signe le tweak avec le
    certificat de LiveContainer. Sans ça, YouTube affiche « Failed to load tweaks … code signature invalid ».
    Si la signature échoue, importe d'abord le certificat de SideStore dans les **Paramètres** de LiveContainer.
-6. Lance YouTube **depuis LiveContainer** : le bandeau « ShortLimiter actif » s'affiche au lancement, et un appui
+6. Lance YouTube **depuis LiveContainer** : la rubrique **Shorts Limiter** apparaît dans les Paramètres de YouTube (sa première ligne donne la version du tweak), et un appui
    long à trois doigts ouvre les réglages.
 
 Pour mettre à jour : remplace le fichier par la nouvelle version (même lien), retouche le bouton **signature**,

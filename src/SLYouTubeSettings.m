@@ -115,7 +115,7 @@ static void SLBuildSection(id manager) {
     void (^add)(id) = ^(id item) { if (item) [items addObject:item]; };
 
     // Blocage de toute l'app pendant un focus NoteFlow (shared/NFFocus.m) : liaison avec le code copié dans NoteFlow
-    add(SLItem(@"Mode focus NoteFlow", @"YouTube entier est bloqué pendant tes focus. Touche pour coller le code de liaison copié dans NoteFlow", ^NSString *{
+    add(SLItem(@"Mode focus NoteFlow", [NSString stringWithFormat:@"YouTube entier est bloqué pendant tes focus. Touche pour coller le code de liaison copié dans NoteFlow. Version %s", SL_VERSION], ^NSString *{
         return NFFocusStatus();
     }, ^BOOL(id cell, NSUInteger arg) {
         UIViewController *from = [vc isKindOfClass:UIViewController.class] ? vc : nil;
