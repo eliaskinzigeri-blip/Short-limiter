@@ -401,6 +401,27 @@ static BOOL SMWriteSpotify(NSArray *vals, NSString *preset, BOOL backup) {
     return prefixes.count > 0 || live;
 }
 
+/// Courbe de Spotify d'avant le premier passage de SoundMatch, retrouvée dans le journal (lignes « Réglage Spotify »
+/// notées au lancement, avant la première écriture).
+static NSArray *SMJournalSpotifyValues(void) {
+    NSString *text = [NSString stringWithContentsOfFile:SMLogPath() encoding:NSUTF8StringEncoding error:nil];
+    if (!text) return nil;
+    NSRegularExpression *num = [NSRegularExpression regularExpressionWithPattern:@"-?[0-9]+(\\.[0-9]+)?(e-?[0-9]+)?" options:0 error:nil];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if ([line containsString:@"Égaliseur Spotify : réglage écrit"]) return nil; // déjà écrasée à ce moment-là
+        if (![line containsString:@"Réglage Spotify : "] || ![line containsString:@"equalizer.values = ("]) continue;
+        NSRange open = [line rangeOfString:@"equalizer.values = ("];
+        NSRange close = [line rangeOfString:@")" options:0 range:NSMakeRange(NSMaxRange(open), line.length - NSMaxRange(open))];
+        if (close.location == NSNotFound) continue;
+        NSString *inner = [line substringWithRange:NSMakeRange(NSMaxRange(open), close.location - NSMaxRange(open))];
+        NSMutableArray *vals = [NSMutableArray array];
+        for (NSTextCheckingResult *m in [num matchesInString:inner options:0 range:NSMakeRange(0, inner.length)])
+            [vals addObject:@(fmax(-1.0, fmin(1.0, [inner substringWithRange:m.range].doubleValue)))];
+        if (vals.count == SM_BANDS) return vals;
+    }
+    return nil;
+}
+
 static BOOL SMApplyToSpotify(const float *g) {
     NSMutableArray *vals = [NSMutableArray array];
     for (int i = 0; i < SM_BANDS; i++) [vals addObject:@(fmax(-1.0, fmin(1.0, g[i] / 12.0)))];
@@ -691,7 +712,8 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     }
     if (![self ensureWindow]) return;
     _toast.hidden = !toast;
-    _settingsButton.hidden = !_inSettings || _testing;
+    BOOL menuOpen = [[self topController] isKindOfClass:UIAlertController.class]; // ne pas cacher le menu
+    _settingsButton.hidden = !_inSettings || _testing || menuOpen;
     _card.hidden = !_testing;
     if (_testing) {
         BOOL sound = CFAbsoluteTimeGetCurrent() - gLastRender < 1.5;
@@ -927,6 +949,10 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         }
     }]];
     NSDictionary *backup = [NSUserDefaults.standardUserDefaults dictionaryForKey:SMKey("spotifyBackup")];
+    if (![backup[@"values"] isKindOfClass:NSArray.class]) {
+        NSArray *fromJournal = SMJournalSpotifyValues();
+        if (fromJournal) backup = @{@"values": fromJournal};
+    }
     if ([backup[@"values"] isKindOfClass:NSArray.class]) {
         [a addAction:[UIAlertAction actionWithTitle:@"Remettre mon ancien égaliseur Spotify" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
             if (SMWriteSpotify(backup[@"values"], backup[@"preset"], NO)) {
