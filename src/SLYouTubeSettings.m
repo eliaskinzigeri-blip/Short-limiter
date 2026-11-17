@@ -4,6 +4,7 @@
 // Objective-C et chaque classe / méthode est vérifiée : si YouTube change, la rubrique n'apparaît simplement pas
 // (les réglages restent accessibles par l'appui long à trois doigts).
 #import "SL.h"
+#import "NFFocus.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -112,6 +113,16 @@ static void SLBuildSection(id manager) {
     SLCore *c = SLCore.shared;
     NSMutableArray *items = [NSMutableArray array];
     void (^add)(id) = ^(id item) { if (item) [items addObject:item]; };
+
+    // Blocage de toute l'app pendant un focus NoteFlow (shared/NFFocus.m) : liaison avec le code copié dans NoteFlow
+    add(SLItem(@"Mode focus NoteFlow", @"YouTube entier est bloqué pendant tes focus. Touche pour coller le code de liaison copié dans NoteFlow", ^NSString *{
+        return NFFocusStatus();
+    }, ^BOOL(id cell, NSUInteger arg) {
+        UIViewController *from = [vc isKindOfClass:UIViewController.class] ? vc : nil;
+        while (from.presentedViewController) from = from.presentedViewController;
+        if (from) NFFocusPresentSettings(from);
+        return YES;
+    }));
 
     add(SLItem(@"Temps sur les Shorts aujourd'hui", nil, ^NSString *{
         return SLFormat([SLCore.shared.today[@"seconds"] doubleValue]);
