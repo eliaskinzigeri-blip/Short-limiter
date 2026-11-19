@@ -9,6 +9,7 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import "SMRebind.h"
+#import "SMStats.h"
 
 #ifndef SM_VERSION
 #define SM_VERSION "dev"
@@ -45,6 +46,8 @@ static void SMLog(NSString *line) {
     [h closeFile];
 }
 
+void SMLogPublic(NSString *line) { SMLog(line); }
+
 static void SMLogMain(NSString *line) {
     dispatch_async(dispatch_get_main_queue(), ^{ SMLog(line); });
 }
@@ -67,6 +70,11 @@ static float gGains[SM_BANDS];          // gains appliqués (dB)
 static volatile int gVersion = 1;       // change à chaque nouveau réglage
 static volatile int gActive = 0;        // égaliseur appliqué (test en cours ou réglage activé)
 static volatile double gLastRender = 0; // dernier passage du son (CFAbsoluteTime)
+
+BOOL SMAudioLooksActive(void) {
+    if (gLastRender == 0) return YES; // pas encore de mesure du son : on se fie à « en lecture »
+    return CFAbsoluteTimeGetCurrent() - gLastRender < 2.5;
+}
 
 static void SMSetGains(const float *g, BOOL active) {
     for (int i = 0; i < SM_BANDS; i++) gGains[i] = g[i];
@@ -647,6 +655,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     SMLog([NSString stringWithFormat:@"SoundMatch %s chargé dans %@ (%@)", SM_VERSION, NSBundle.mainBundle.bundleIdentifier,
            [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]]);
     SMApplySaved();
+    SMStatsStart();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SMDiscoverSpotifyEqualizer();
     });
@@ -689,7 +698,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
         for (UIResponder *r = hit; r; r = r.nextResponder) {
             if (![r isKindOfClass:UIViewController.class]) continue;
             NSString *low = NSStringFromClass(r.class).lowercaseString;
-            if ([low containsString:@"nowplaying"] || [low containsString:@"player"]) return NO;
+            if ([low containsString:@"nowplaying"] || [low containsString:@"player"] || [low containsString:@"smstats"]) return NO;
             if ([low containsString:@"setting"] || [low containsString:@"equaliz"] || [low containsString:@"preference"]) found = YES;
         }
         return found;
@@ -704,7 +713,18 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
 
 - (void)tick {
     [self installGestures];
-    _inSettings = !_testing && [self settingsVisible];
+    // Lignes SoundMatch dans les paramètres de Spotify ; le bouton flottant ne sert plus qu'en secours
+    BOOL rows = NO;
+    if (!_testing) {
+        __weak SMCore *weakSelf = self;
+        rows = SMSettingsInject([self appWindows], ^{
+            SMCore *me = weakSelf;
+            if (!me) return;
+            me->_inSettings = NO;
+            [me openTest];
+        }, ^{ [weakSelf openMenu]; });
+    }
+    _inSettings = !_testing && !rows && [self settingsVisible];
     if (gAttachedCount == 0 && !_loggedAttached && gLastRender == 0) {
         // rien encore : normal tant qu'aucune musique n'a été lancée
     }
@@ -980,6 +1000,12 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SoundMatch"
         message:[NSString stringWithFormat:@"Égaliseur %@\nVersion %s", enabled ? @"activé" : @"désactivé", SM_VERSION]
         preferredStyle:UIAlertControllerStyleActionSheet];
+    [a addAction:[UIAlertAction actionWithTitle:@"Stats d'écoute" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIViewController *t = [self topController]; // une fois le menu fermé
+            if (t) SMStatsOpenFrom(t);
+        });
+    }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Trouver mon égaliseur" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         self->_inSettings = NO;
         [self openTest];
