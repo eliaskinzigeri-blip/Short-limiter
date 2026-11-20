@@ -1289,7 +1289,17 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     imp.tintColor = UIColor.whiteColor;
     [imp addTarget:self action:@selector(importTapped) forControlEvents:UIControlEventTouchUpInside];
     [_bar addSubview:imp];
+    UIButton *shr = [UIButton buttonWithType:UIButtonTypeSystem];
+    shr.translatesAutoresizingMaskIntoConstraints = NO;
+    [shr setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    shr.tintColor = UIColor.whiteColor;
+    [shr addTarget:self action:@selector(shareTapped) forControlEvents:UIControlEventTouchUpInside];
+    [_bar addSubview:shr];
     [NSLayoutConstraint activateConstraints:@[
+        [shr.trailingAnchor constraintEqualToAnchor:imp.leadingAnchor constant:-2],
+        [shr.centerYAnchor constraintEqualToAnchor:_bar.centerYAnchor],
+        [shr.widthAnchor constraintEqualToConstant:44],
+        [shr.heightAnchor constraintEqualToConstant:44],
         [imp.trailingAnchor constraintEqualToAnchor:_bar.trailingAnchor constant:-8],
         [imp.centerYAnchor constraintEqualToAnchor:_bar.centerYAnchor],
         [imp.widthAnchor constraintEqualToConstant:44],
@@ -1571,6 +1581,28 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     [super viewDidLayoutSubviews];
     UIView *header = _table.tableHeaderView;
     if (header && fabs(header.bounds.size.width - _table.bounds.size.width) > 1) [self reload];
+}
+
+#pragma mark Affiche à partager
+
+- (void)shareTapped {
+    if (_agg.total < 1) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Rien à partager" message:@"Aucune écoute sur cette période."
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:a animated:YES completion:nil];
+        return;
+    }
+    BOOL top = _range == SMRangeSpotify;
+    NSMutableArray *artists = [NSMutableArray array], *tracks = [NSMutableArray array];
+    for (NSDictionary *a in _agg.artists) { if (artists.count == 5) break; [artists addObject:a[@"name"] ?: @""]; }
+    for (NSDictionary *t in _agg.tracks) { if (tracks.count == 5) break; [tracks addObject:t[@"t"] ?: @""]; }
+    NSDictionary *a0 = _agg.artists.firstObject, *t0 = _agg.tracks.firstObject;
+    NSString *artistImg = top ? a0[@"img"] : gArtistImg[[a0[@"name"] lowercaseString]];
+    NSString *trackImg = top ? t0[@"img"] : ([t0[@"url"] length] ? t0[@"url"] : SMArtFor(t0[@"key"], t0[@"t"]));
+    long minutes = lround(_agg.total / 60.0);
+    NSString *min = top ? nil : [NSString stringWithFormat:@"%@ minute%@", SMGroup(minutes), minutes > 1 ? @"s" : @""];
+    SMPosterPresent(self, _period.text, min, artists, tracks, artistImg, trackImg);
 }
 
 #pragma mark Import de l'historique Spotify

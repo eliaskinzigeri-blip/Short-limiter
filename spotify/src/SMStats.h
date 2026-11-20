@@ -11,7 +11,11 @@ void SMStatsStart(void);
 /// Écran « Stats d'écoute ».
 UIViewController *SMStatsMakeController(void);
 void SMStatsOpenFrom(UIViewController *from);
-NSArray<NSURL *> *SMStatsCaptureFiles(void); // réponses de Spotify relevées (diagnostic)
+NSArray<NSURL *> *SMStatsCaptureFiles(void);
+/// Affiche « Mes stats d'écoute » (style des affiches de Spotify) : aperçu puis partage.
+/// Images : adresse http(s) ou chemin de fichier, ou nil.
+void SMPosterPresent(UIViewController *from, NSString *period, NSString *minutes, NSArray<NSString *> *artists,
+                     NSArray<NSString *> *tracks, NSString *artistImage, NSString *trackImage); // réponses de Spotify relevées (diagnostic)
 
 /// Ajoute les lignes SoundMatch dans l'écran des paramètres affiché (racine des paramètres et égaliseur).
 /// Renvoie YES si les lignes sont visibles à l'écran (le bouton flottant devient alors inutile).
