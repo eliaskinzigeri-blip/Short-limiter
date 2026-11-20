@@ -10,7 +10,8 @@ int SMAudioSound(void);        // 1 : du son sort de Spotify, 0 : silence, -1 : 
 void SMStatsStart(void);
 /// Écran « Stats d'écoute ».
 UIViewController *SMStatsMakeController(void);
-void SMStatsOpenFrom(UIViewController *from); // poussé dans la navigation de Spotify, sinon présenté
+void SMStatsOpenFrom(UIViewController *from);
+NSArray<NSURL *> *SMStatsCaptureFiles(void); // réponses de Spotify relevées (diagnostic)
 
 /// Ajoute les lignes SoundMatch dans l'écran des paramètres affiché (racine des paramètres et égaliseur).
 /// Renvoie YES si les lignes sont visibles à l'écran (le bouton flottant devient alors inutile).

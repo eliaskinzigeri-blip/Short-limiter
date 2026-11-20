@@ -206,6 +206,7 @@ static void SMHookNowPlaying(void) {
 
 static void SMLoadSpotifyCache(void);
 static void SMHookAuth(void);
+static void SMHookSessions(void);
 static void SMFetchRecent(void (^done)(void));
 
 void SMStatsStart(void) {
@@ -215,6 +216,7 @@ void SMStatsStart(void) {
         SMLoadSpotifyCache();
         SMHookNowPlaying();
         SMHookAuth();
+        SMHookSessions();
         NSTimer *recent = [NSTimer timerWithTimeInterval:600 repeats:YES block:^(NSTimer *x) { SMFetchRecent(nil); }];
         [NSRunLoop.mainRunLoop addTimer:recent forMode:NSRunLoopCommonModes];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ SMFetchRecent(nil); });
@@ -242,6 +244,7 @@ static BOOL gFetchingTop;
 static NSMutableDictionary *gRecentDays, *gRecentTracks; // dernières écoutes données par Spotify, par jour
 static NSMutableArray *gRecentSeen;               // played_at déjà comptés
 static CFAbsoluteTime gRecentAt;
+static CFAbsoluteTime gTopFailAt; // dernier échec : pas de nouvel essai avant 10 min (évite de bombarder Spotify)
 
 static NSString *SMHex(NSString *str) {
     uint64_t h = 1469598103934665603ULL;
@@ -296,6 +299,91 @@ static void SMHookAuth(void) {
     }
 }
 
+#pragma mark Relevé des requêtes de l'app (pour trouver où Spotify range les stats)
+
+static NSString *SMCaptureDir(void) {
+    NSString *dir = SMDocPath(@"SoundMatch-captures");
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
+NSArray<NSURL *> *SMStatsCaptureFiles(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:SMCaptureDir() error:nil])
+        [out addObject:[NSURL fileURLWithPath:[SMCaptureDir() stringByAppendingPathComponent:f]]];
+    return out;
+}
+
+/// Chemin sans les identifiants (suites de chiffres ou de lettres longues) : un même type de requête = une ligne.
+static NSString *SMPathPattern(NSURL *u) {
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *seg in [u.path componentsSeparatedByString:@"/"]) {
+        BOOL isId = seg.length >= 16 || ([seg rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet].location != NSNotFound && seg.length >= 6);
+        [parts addObject:isId ? @"*" : seg];
+    }
+    return [NSString stringWithFormat:@"%@%@", u.host, [parts componentsJoinedByString:@"/"]];
+}
+
+static void SMSeeResponse(NSURLRequest *req, NSData *data, NSURLResponse *resp) {
+    NSURL *u = req.URL;
+    NSString *host = u.host.lowercaseString;
+    if (![host containsString:@"spotify"] || [host hasPrefix:@"api.spotify"]) return;
+    NSString *pattern = SMPathPattern(u);
+    static NSMutableSet *seen;
+    static int saved;
+    if (!seen) seen = [NSMutableSet set];
+    NSInteger st = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : -1;
+    @synchronized (SMCaptureDir()) {
+        if (![seen containsObject:pattern]) {
+            [seen addObject:pattern];
+            SMLogPublic([NSString stringWithFormat:@"Requête Spotify : %@ %@ → %ld, %lu octets", req.HTTPMethod ?: @"GET", pattern, (long)st, (unsigned long)data.length]);
+        }
+        NSString *low = pattern.lowercaseString;
+        NSArray *keys = @[@"stat", @"highlight", @"listening", @"recent", @"history", @"top", @"wrapped", @"timeline", @"insight", @"played"];
+        BOOL interesting = NO;
+        for (NSString *k in keys) if ([low containsString:k]) interesting = YES;
+        if (interesting && data.length && data.length < 400000 && saved < 40) {
+            saved++;
+            NSString *name = [NSString stringWithFormat:@"%02d-%@.bin", saved,
+                [[pattern stringByReplacingOccurrencesOfString:@"/" withString:@"_"] substringToIndex:MIN(80, pattern.length)]];
+            NSMutableData *out = [NSMutableData dataWithData:[[NSString stringWithFormat:@"%@ %@\nstatus %ld\n\n", req.HTTPMethod ?: @"GET", u.absoluteString, (long)st] dataUsingEncoding:NSUTF8StringEncoding]];
+            [out appendData:data];
+            [out writeToFile:[SMCaptureDir() stringByAppendingPathComponent:name] atomically:YES];
+            SMLogPublic([NSString stringWithFormat:@"Requête Spotify enregistrée : %@", name]);
+        }
+    }
+}
+
+static void SMHookSessionClass(Class cls) {
+    SEL sel = @selector(dataTaskWithRequest:completionHandler:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    static NSMutableSet *done;
+    if (!done) done = [NSMutableSet set];
+    NSValue *key = [NSValue valueWithPointer:method_getImplementation(m)];
+    if ([done containsObject:key]) return;
+    [done addObject:key];
+    id (*orig)(id, SEL, NSURLRequest *, id) = (void *)method_getImplementation(m);
+    IMP imp = imp_implementationWithBlock(^id(id self, NSURLRequest *req, void (^handler)(NSData *, NSURLResponse *, NSError *)) {
+        if (!handler || ![req.URL.host.lowercaseString containsString:@"spotify"]) return orig(self, sel, req, handler);
+        void (^wrapped)(NSData *, NSURLResponse *, NSError *) = ^(NSData *d, NSURLResponse *r, NSError *e) {
+            SMSeeResponse(req, d, r);
+            handler(d, r, e);
+        };
+        return orig(self, sel, req, wrapped);
+    });
+    [done addObject:[NSValue valueWithPointer:imp]]; // jamais deux fois le même relevé
+    if (!class_addMethod(cls, sel, imp, method_getTypeEncoding(m)))
+        method_setImplementation(m, imp);
+}
+
+static void SMHookSessions(void) {
+    SMHookSessionClass(NSURLSession.class);
+    SMHookSessionClass(NSURLSession.sharedSession.class);
+    Class local = NSClassFromString(@"__NSURLSessionLocal");
+    if (local) SMHookSessionClass(local);
+}
+
 static void SMApiGet(NSString *path, void (^done)(id json, NSInteger status)) {
     if (!gToken) { done(nil, 0); return; }
     NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[@"https://api.spotify.com/v1/" stringByAppendingString:path]]];
@@ -342,7 +430,7 @@ static void SMLoadSpotifyCache(void) {
 
 /// Classement Spotify : top artistes et titres sur 4 semaines, 6 mois et environ 1 an.
 static void SMFetchTop(void (^done)(void)) {
-    if (gFetchingTop) return;
+    if (gFetchingTop || (gTopFailAt && CFAbsoluteTimeGetCurrent() - gTopFailAt < 600)) return;
     if (!gToken) {
         gSpotifyStatus = @"Connexion Spotify pas encore trouvée : ouvre l'accueil ou une playlist de Spotify, puis reviens ici.";
         if (done) done();
@@ -364,6 +452,7 @@ static void SMFetchTop(void (^done)(void)) {
             SMSaveSpotifyCache();
             SMLogPublic(@"Stats : classement Spotify mis à jour");
         } else {
+            gTopFailAt = CFAbsoluteTimeGetCurrent();
             gSpotifyStatus = [NSString stringWithFormat:@"Spotify refuse la lecture du classement (code %ld).", (long)lastError];
             SMLogPublic([@"Stats : " stringByAppendingString:gSpotifyStatus]);
         }
@@ -409,6 +498,7 @@ static void SMFetchRecent(void (^done)(void)) {
     gRecentAt = CFAbsoluteTimeGetCurrent();
     SMApiGet(@"me/player/recently-played?limit=50", ^(NSDictionary *json, NSInteger st) {
         if (!json) {
+            gRecentAt = CFAbsoluteTimeGetCurrent() + 540; // nouvel essai dans 10 min
             SMLogPublic([NSString stringWithFormat:@"Stats : dernières écoutes refusées par Spotify (code %ld)", (long)st]);
             if (done) done();
             return;
@@ -1098,7 +1188,8 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
         [NSString stringWithFormat:@"Calculé par Spotify pour ton compte (Spotify ne donne pas les minutes de ce classement)%@", when]);
     _chart.hidden = YES;
     [self resizeHeader];
-    if (!gFetchingTop && (!gSpotifyTopAt || -gSpotifyTopAt.timeIntervalSinceNow > 1800)) {
+    BOOL canRetry = !gTopFailAt || CFAbsoluteTimeGetCurrent() - gTopFailAt > 600;
+    if (!gFetchingTop && canRetry && (!gSpotifyTopAt || -gSpotifyTopAt.timeIntervalSinceNow > 1800)) {
         __weak SMStatsController *weakSelf = self;
         SMFetchTop(^{ SMStatsController *me = weakSelf; if (me && me->_range == SMRangeSpotify) [me reload]; });
         if (gFetchingTop) _summary.text = @"Récupération du classement…";

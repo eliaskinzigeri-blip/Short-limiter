@@ -1077,7 +1077,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Partager le journal" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
         UIViewController *t = [self topController];
-        UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:SMLogPath()]] applicationActivities:nil];
+        UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:[@[[NSURL fileURLWithPath:SMLogPath()]] arrayByAddingObjectsFromArray:SMStatsCaptureFiles()] applicationActivities:nil];
         share.popoverPresentationController.sourceView = t.view;
         share.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(t.view.bounds), CGRectGetMidY(t.view.bounds), 1, 1);
         [t presentViewController:share animated:YES completion:nil];
