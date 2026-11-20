@@ -40,6 +40,7 @@ static BOOL gCurCounted, gCurArtSaved;
 static NSDictionary *gLastInfo, *gHookedInfo;
 static CFAbsoluteTime gKeyAt;     // changement de titre
 static __weak id gPrevArt; // pochette du titre précédent (à ne pas attribuer au nouveau)
+static void SMResolveTrack(NSString *key);
 // Historique importé depuis les données que Spotify envoie sur demande (fichiers JSON) : mêmes jours que gDays
 static NSMutableDictionary *gImportDays, *gImportTracks;
 static NSString *gImportUntil; // dernier jour couvert par l'import
@@ -221,7 +222,6 @@ static void SMHookNowPlaying(void) {
 static void SMLoadSpotifyCache(void);
 static void SMHookAuth(void);
 static void SMHookSessions(void);
-static void SMResolveTrack(NSString *key);
 static void SMLoadArtists(void);
 static void SMFetchRecent(void (^done)(void));
 
