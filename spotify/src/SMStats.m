@@ -42,6 +42,7 @@ static CFAbsoluteTime gKeyAt;     // changement de titre
 static __weak id gPrevArt; // pochette du titre précédent (à ne pas attribuer au nouveau)
 static void SMResolveTrack(NSString *key);
 static void SMArtUpdated(void);
+static NSString *SMBaseTitle(NSString *t);
 // Historique importé depuis les données que Spotify envoie sur demande (fichiers JSON) : mêmes jours que gDays
 static NSMutableDictionary *gImportDays, *gImportTracks;
 static NSString *gImportUntil; // dernier jour couvert par l'import
@@ -618,6 +619,11 @@ static void SMLoadArtists(void) {
     NSData *d = [NSData dataWithContentsOfFile:SMDocPath(@"SoundMatch-artists.json")];
     NSDictionary *a = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
     gArtistImg = [a isKindOfClass:NSDictionary.class] ? [a mutableCopy] : [NSMutableDictionary dictionary];
+    // Les photos trouvées par le nom seul pouvaient être celles d'un homonyme : on les recherche à nouveau
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"SoundMatch.artistsV2"]) {
+        for (NSString *k in gArtistImg.allKeys) if ([gArtistImg[k] containsString:@"dzcdn"]) [gArtistImg removeObjectForKey:k];
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"SoundMatch.artistsV2"];
+    }
 }
 
 static void SMSaveArtists(void) {
@@ -719,29 +725,67 @@ static void SMGetJSON(NSString *url, void (^done)(id json)) {
     }] resume];
 }
 
-/// Photo d'un artiste par son nom (catalogue public de Deezer), seulement si le nom correspond exactement.
+/// Photo d'un artiste : d'abord via un de tes titres où il apparaît (le bon artiste, pas un homonyme),
+/// sinon par son nom exact, en prenant celui qui a le plus de fans.
 static void SMFindArtistPhoto(NSString *name) {
     if (!name.length || gArtistImg[name.lowercaseString]) return;
     if (!gTried) gTried = [NSMutableSet set];
     NSString *tag = [@"a:" stringByAppendingString:name.lowercaseString];
     if ([gTried containsObject:tag]) return;
     [gTried addObject:tag];
-    NSString *q = [name stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
-    SMGetJSON([@"https://api.deezer.com/search/artist?limit=10&q=" stringByAppendingString:q], ^(NSDictionary *json) {
-        for (NSDictionary *a in json[@"data"]) {
-            if (![a isKindOfClass:NSDictionary.class] || ![a[@"name"] isKindOfClass:NSString.class]) continue;
-            if (![SMFold(a[@"name"]) isEqualToString:SMFold(name)]) continue;
-            NSString *pic = [a[@"picture_big"] isKindOfClass:NSString.class] ? a[@"picture_big"] : a[@"picture_medium"];
-            if (![pic isKindOfClass:NSString.class] || [pic containsString:@"/artist//"]) continue; // pas de photo
-            gArtistImg[name.lowercaseString] = pic;
-            SMSaveArtists();
-            SMArtUpdated();
+    NSString *fold = SMFold(name);
+    NSMutableArray *queries = [NSMutableArray array];
+    for (NSString *k in gTracks) {
+        NSDictionary *m = gTracks[k];
+        BOOL his = NO;
+        for (NSString *n in SMSplitArtistsAll(SMCleanArtist(m[@"a"] ?: @""))) if ([SMFold(n) isEqualToString:fold]) his = YES;
+        NSString *t = m[@"t"] ?: @"";
+        if ([SMFold(t) containsString:fold]) his = YES; // « LEVEL UP - Nouvelle École »
+        if (!his || !t.length) continue;
+        [queries addObject:[NSString stringWithFormat:@"artist:\"%@\" track:\"%@\"", name, SMBaseTitle(t)]];
+        if (queries.count >= 3) break;
+    }
+    __block void (^next)(NSUInteger) = nil; // gardé jusqu'à la fin des recherches
+    void (^found)(NSString *) = ^(NSString *pic) {
+        gArtistImg[name.lowercaseString] = pic;
+        SMSaveArtists();
+        SMArtUpdated();
+    };
+    next = ^(NSUInteger i) {
+        if (i < queries.count) {
+            NSString *q = [queries[i] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
+            SMGetJSON([@"https://api.deezer.com/search?limit=10&q=" stringByAppendingString:q], ^(NSDictionary *json) {
+                for (NSDictionary *t in json[@"data"]) {
+                    NSDictionary *ar = [t isKindOfClass:NSDictionary.class] ? t[@"artist"] : nil;
+                    if (![ar isKindOfClass:NSDictionary.class] || ![ar[@"name"] isKindOfClass:NSString.class]) continue;
+                    if (![SMFold(ar[@"name"]) isEqualToString:fold]) continue;
+                    NSString *pic = ar[@"picture_big"];
+                    if (![pic isKindOfClass:NSString.class] || [pic containsString:@"/artist//"]) continue;
+                    found(pic);
+                    next = nil;
+                    return;
+                }
+                if (next) next(i + 1);
+            });
             return;
         }
-    });
+        // Dernier recours : le nom exact avec le plus de fans
+        NSString *q = [name stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet] ?: @"";
+        SMGetJSON([@"https://api.deezer.com/search/artist?limit=15&q=" stringByAppendingString:q], ^(NSDictionary *json) {
+            NSDictionary *best = nil;
+            for (NSDictionary *a in json[@"data"]) {
+                if (![a isKindOfClass:NSDictionary.class] || ![a[@"name"] isKindOfClass:NSString.class]) continue;
+                if (![SMFold(a[@"name"]) isEqualToString:fold]) continue;
+                if (![a[@"picture_big"] isKindOfClass:NSString.class] || [a[@"picture_big"] containsString:@"/artist//"]) continue;
+                if (!best || [a[@"nb_fan"] longLongValue] > [best[@"nb_fan"] longLongValue]) best = a;
+            }
+            if (best) found(best[@"picture_big"]);
+            next = nil;
+        });
+    };
+    next(0);
 }
 
-/// Pochette d'un titre sans identifiant Spotify : recherche titre + artiste principal.
 /// « LEVEL UP - Nouvelle École », « Titre (feat. X) » → « LEVEL UP », « Titre »
 static NSString *SMBaseTitle(NSString *t) {
     NSString *x = t;
