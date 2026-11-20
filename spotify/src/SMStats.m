@@ -696,10 +696,12 @@ static void SMResolveTrack(NSString *key) {
 
 static NSMutableSet *gTried; // recherches déjà faites (pas deux fois la même)
 
-static NSString *SMSplitArtistsFirst(NSString *a) {
-    NSString *f = [a componentsSeparatedByString:@", "].firstObject;
-    return f.length ? f : a;
+static NSArray<NSString *> *SMSplitArtistsAll(NSString *a) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *p in [a componentsSeparatedByString:@", "]) if (p.length) [out addObject:p];
+    return out;
 }
+
 
 static NSString *SMFold(NSString *x) {
     return [[x stringByFoldingWithOptions:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch locale:nil]
@@ -740,6 +742,18 @@ static void SMFindArtistPhoto(NSString *name) {
 }
 
 /// Pochette d'un titre sans identifiant Spotify : recherche titre + artiste principal.
+/// « LEVEL UP - Nouvelle École », « Titre (feat. X) » → « LEVEL UP », « Titre »
+static NSString *SMBaseTitle(NSString *t) {
+    NSString *x = t;
+    for (NSString *sep in @[@" - ", @" (", @" [", @" feat", @" ft."]) {
+        NSRange r = [x rangeOfString:sep options:NSCaseInsensitiveSearch];
+        if (r.location != NSNotFound && r.location > 0) x = [x substringToIndex:r.location];
+    }
+    return [x stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+}
+
+/// Pochette d'un titre sans identifiant Spotify : plusieurs recherches (titre exact, titre court, texte libre),
+/// en n'acceptant qu'un résultat dont l'artiste fait partie des artistes du titre.
 static void SMFindCover(NSString *key) {
     NSMutableDictionary *meta = gTracks[key];
     if (![meta isKindOfClass:NSMutableDictionary.class] || [meta[@"img"] length] || [meta[@"img2"] length]) return;
@@ -747,22 +761,45 @@ static void SMFindCover(NSString *key) {
     NSString *tag = [@"t:" stringByAppendingString:key];
     if ([gTried containsObject:tag]) return;
     [gTried addObject:tag];
-    NSString *title = meta[@"t"], *artist = SMSplitArtistsFirst(SMCleanArtist(meta[@"a"] ?: @""));
-    NSString *q = [NSString stringWithFormat:@"artist:\"%@\" track:\"%@\"", artist, title];
-    q = [q stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
-    SMGetJSON([@"https://api.deezer.com/search?limit=5&q=" stringByAppendingString:q], ^(NSDictionary *json) {
-        for (NSDictionary *t in json[@"data"]) {
-            if (![t isKindOfClass:NSDictionary.class]) continue;
-            NSString *an = [t[@"artist"] isKindOfClass:NSDictionary.class] ? t[@"artist"][@"name"] : nil;
-            NSString *cover = [t[@"album"] isKindOfClass:NSDictionary.class] ? t[@"album"][@"cover_big"] : nil;
-            if (![an isKindOfClass:NSString.class] || ![cover isKindOfClass:NSString.class]) continue;
-            if (![SMFold(an) isEqualToString:SMFold(artist)]) continue;
-            meta[@"img2"] = cover;
-            gDirty = YES;
-            SMArtUpdated();
+    NSString *title = meta[@"t"] ?: @"";
+    NSArray *names = SMSplitArtistsAll(SMCleanArtist(meta[@"a"] ?: @""));
+    NSString *first = names.firstObject ?: @"";
+    NSString *base = SMBaseTitle(title);
+    NSMutableArray *queries = [NSMutableArray arrayWithObject:[NSString stringWithFormat:@"artist:\"%@\" track:\"%@\"", first, title]];
+    if (![base isEqualToString:title]) [queries addObject:[NSString stringWithFormat:@"artist:\"%@\" track:\"%@\"", first, base]];
+    [queries addObject:[NSString stringWithFormat:@"%@ %@", first, base]];
+    NSMutableSet *folded = [NSMutableSet set];
+    for (NSString *n in names) [folded addObject:SMFold(n)];
+    // les artistes cités dans le titre (« - Nouvelle École ») comptent aussi
+    NSRange dash = [title rangeOfString:@" - "];
+    if (dash.location != NSNotFound) [folded addObject:SMFold([title substringFromIndex:NSMaxRange(dash)])];
+    __block void (^next)(NSUInteger) = nil; // gardé jusqu'à la fin des recherches, puis libéré
+    next = ^(NSUInteger i) {
+        if (i >= queries.count) {
+            SMLogPublic([NSString stringWithFormat:@"Stats : pochette introuvable pour « %@ »", title]);
+            next = nil;
             return;
         }
-    });
+        NSString *q = [queries[i] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
+        SMGetJSON([@"https://api.deezer.com/search?limit=10&q=" stringByAppendingString:q], ^(NSDictionary *json) {
+            for (NSDictionary *t in json[@"data"]) {
+                if (![t isKindOfClass:NSDictionary.class]) continue;
+                NSString *an = [t[@"artist"] isKindOfClass:NSDictionary.class] ? t[@"artist"][@"name"] : nil;
+                NSString *tt = [t[@"title"] isKindOfClass:NSString.class] ? t[@"title"] : @"";
+                NSString *cover = [t[@"album"] isKindOfClass:NSDictionary.class] ? t[@"album"][@"cover_big"] : nil;
+                if (![an isKindOfClass:NSString.class] || ![cover isKindOfClass:NSString.class]) continue;
+                if (![folded containsObject:SMFold(an)]) continue;
+                if (![SMFold(SMBaseTitle(tt)) isEqualToString:SMFold(base)]) continue;
+                meta[@"img2"] = cover;
+                gDirty = YES;
+                SMArtUpdated();
+                next = nil;
+                return;
+            }
+            if (next) next(i + 1);
+        });
+    };
+    next(0);
 }
 
 #pragma mark - Périodes et calculs
@@ -1040,9 +1077,30 @@ static NSDictionary *SMReadSpotifyHistory(NSArray<NSURL *> *urls) {
 }
 
 /// Pochette d'un titre ; pour un titre importé (sans pochette), celle du même titre écouté sur l'iPhone.
+/// Pochette relevée sur l'iPhone mais identique à celle d'un autre album : c'était celle du titre précédent.
+static BOOL SMArtLooksWrong(NSString *key, NSString *path) {
+    static NSMutableDictionary *verdict;
+    if (!verdict) verdict = [NSMutableDictionary dictionary];
+    if (verdict[key]) return [verdict[key] boolValue];
+    NSData *mine = [NSData dataWithContentsOfFile:path];
+    NSString *album = gTracks[key][@"al"] ?: @"";
+    BOOL wrong = NO;
+    for (NSString *k in gTracks) {
+        if ([k isEqualToString:key]) continue;
+        NSString *otherAlbum = gTracks[k][@"al"] ?: @"";
+        if (!album.length || [otherAlbum isEqualToString:album]) continue;
+        NSString *q = SMArtPath(k);
+        NSDictionary *attrs = [NSFileManager.defaultManager attributesOfItemAtPath:q error:nil];
+        if (!attrs || [attrs fileSize] != mine.length) continue;
+        if ([[NSData dataWithContentsOfFile:q] isEqualToData:mine]) { wrong = YES; break; }
+    }
+    verdict[key] = @(wrong);
+    return wrong;
+}
+
 static NSString *SMArtFor(NSString *key, NSString *title) {
     NSString *p = SMArtPath(key);
-    if ([NSFileManager.defaultManager fileExistsAtPath:p]) return p;
+    if ([NSFileManager.defaultManager fileExistsAtPath:p]) return SMArtLooksWrong(key, p) ? nil : p;
     NSString *low = title.lowercaseString;
     NSString *artistPart = [key componentsSeparatedByString:@"\u2014"].lastObject.lowercaseString;
     for (NSString *k in gTracks) {
