@@ -75,25 +75,54 @@ static void SMDrawLine(NSString *text, CGRect rect, UIFont *font, UIColor *color
             attributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: color, NSParagraphStyleAttributeName: ps} context:nil];
 }
 
-/// Logo Spotify dessiné : rond plein et trois ondes.
+/// Petit lecteur de tracés SVG (commandes M, C, c, z) : assez pour le logo.
+static UIBezierPath *SMSVGPath(NSString *d, CGFloat scale, CGPoint origin) {
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    NSScanner *sc = [NSScanner scannerWithString:d];
+    sc.charactersToBeSkipped = [NSCharacterSet characterSetWithCharactersInString:@" ,\n"];
+    NSCharacterSet *cmds = [NSCharacterSet characterSetWithCharactersInString:@"MmCcLlZz"];
+    unichar cmd = 'M';
+    CGPoint cur = CGPointZero;
+#define SMPT(x, y) CGPointMake(origin.x + (x) * scale, origin.y + (y) * scale)
+    while (!sc.isAtEnd) {
+        NSString *c = nil;
+        if ([sc scanCharactersFromSet:cmds intoString:&c] && c.length) cmd = [c characterAtIndex:c.length - 1];
+        if (cmd == 'z' || cmd == 'Z') { [p closePath]; cmd = 'M'; continue; }
+        int need = (cmd == 'C' || cmd == 'c') ? 6 : 2;
+        double v[6];
+        BOOL ok = YES;
+        for (int i = 0; i < need && ok; i++) ok = [sc scanDouble:&v[i]];
+        if (!ok) break;
+        BOOL rel = cmd == 'c' || cmd == 'm' || cmd == 'l';
+        if (rel) for (int i = 0; i < need; i++) v[i] += (i % 2 == 0) ? cur.x : cur.y;
+        if (cmd == 'M' || cmd == 'm') {
+            cur = CGPointMake(v[0], v[1]);
+            [p moveToPoint:SMPT(cur.x, cur.y)];
+            cmd = rel ? 'l' : 'L';
+        } else if (cmd == 'L' || cmd == 'l') {
+            cur = CGPointMake(v[0], v[1]);
+            [p addLineToPoint:SMPT(cur.x, cur.y)];
+        } else {
+            [p addCurveToPoint:SMPT(v[4], v[5]) controlPoint1:SMPT(v[0], v[1]) controlPoint2:SMPT(v[2], v[3])];
+            cur = CGPointMake(v[4], v[5]);
+        }
+    }
+#undef SMPT
+    return p;
+}
+
+/// Logo Spotify : rond plein et trois ondes, d'après le tracé de l'icône (carré de 168).
 static void SMDrawLogo(CGPoint c, CGFloat R, UIColor *fg, UIColor *bg) {
     [fg setFill];
     [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(c.x - R, c.y - R, 2 * R, 2 * R)] fill];
-    CGFloat arcs[3][7] = {
-        {-0.58, -0.20, 0.00, -0.52, 0.60, 0.02, 0.17},
-        {-0.48, 0.12, 0.00, -0.12, 0.50, 0.30, 0.14},
-        {-0.40, 0.40, 0.00, 0.20, 0.42, 0.56, 0.11},
-    };
-    [bg setStroke];
-    for (int i = 0; i < 3; i++) {
-        UIBezierPath *p = [UIBezierPath bezierPath];
-        [p moveToPoint:CGPointMake(c.x + arcs[i][0] * R, c.y + arcs[i][1] * R)];
-        [p addQuadCurveToPoint:CGPointMake(c.x + arcs[i][4] * R, c.y + arcs[i][5] * R)
-                  controlPoint:CGPointMake(c.x + arcs[i][2] * R, c.y + arcs[i][3] * R)];
-        p.lineWidth = arcs[i][6] * R;
-        p.lineCapStyle = kCGLineCapRound;
-        [p stroke];
-    }
+    NSArray *waves = @[
+        @"M133.7,74.4C106.8,58.4,62.3,56.9,36.6,64.7c-4.1,1.3-8.5-1.1-9.7-5.2c-1.3-4.1,1.1-8.5,5.2-9.7c29.6-9,78.7-7.2,109.7,11.2c3.7,2.2,4.9,7,2.7,10.7C142.3,75.4,137.4,76.6,133.7,74.4z",
+        @"M132.9,98c-1.9,3.1-5.9,4-8.9,2.2c-22.5-13.8-56.8-17.8-83.4-9.8c-3.4,1-7.1-0.9-8.1-4.3c-1-3.4,0.9-7,4.3-8.1c30.4-9.2,68.2-4.8,94.1,11.1C133.8,90.9,134.8,94.9,132.9,98z",
+        @"M122.8,120.8c-1.5,2.5-4.7,3.3-7.2,1.8c-19.7-12-44.4-14.7-73.6-8.1c-2.8,0.6-5.6-1.1-6.3-3.9c-0.6-2.8,1.1-5.6,3.9-6.3c31.9-7.3,59.3-4.2,81.3,9.3C123.5,115.2,124.3,118.4,122.8,120.8z",
+    ];
+    CGFloat scale = 2 * R / 168.0;
+    [bg setFill];
+    for (NSString *w in waves) [SMSVGPath(w, scale, CGPointMake(c.x - R, c.y - R)) fill];
 }
 
 static UIImage *SMRenderPoster(NSString *period, NSString *minutes, NSArray<NSString *> *artists, NSArray<NSString *> *tracks,
