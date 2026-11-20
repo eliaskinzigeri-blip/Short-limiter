@@ -1115,6 +1115,7 @@ static void SMDiscoverSpotifyEqualizer(void) {
 }
 
 __attribute__((constructor)) static void SMInit(void) {
+    SMAccentInstall(); // avant que l'app crée ses couleurs
     SMHookAudio();
     SMHookSpotifyModel();
     dispatch_async(dispatch_get_main_queue(), ^{ [[SMCore shared] start]; });

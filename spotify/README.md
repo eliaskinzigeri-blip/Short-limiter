@@ -5,6 +5,12 @@ Il t'aide à trouver ton égaliseur par comparaisons à l'oreille et affiche tes
 n'est contenue ni publiée ici ; pas de blocage de publicités ni de fonction payante débloquée ; aucun fichier audio
 n'est copié.
 
+## Couleur de l'app
+
+Paramètres de Spotify → **Couleur de l'app** : choisis n'importe quelle couleur dans le sélecteur d'iOS, elle remplace
+le vert de Spotify (boutons, lecture en cours, barres, icônes teintées…) au prochain lancement. « Remettre le vert de
+Spotify » annule. Les images déjà vertes dans les fichiers de l'app ne changent pas.
+
 ## Stats d'écoute
 
 Touche ta **photo de profil** (en haut à gauche) → **Stats d'écoute** : la ligne de Spotify ouvre celles de SoundMatch :

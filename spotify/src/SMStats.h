@@ -19,6 +19,10 @@ void SMPosterPresent(UIViewController *from, NSString *period, NSString *minutes
 
 /// Ajoute les lignes SoundMatch dans l'écran des paramètres affiché (racine des paramètres et égaliseur).
 /// Renvoie YES si les lignes sont visibles à l'écran (le bouton flottant devient alors inutile).
+/// Couleur de l'app à la place du vert de Spotify (posé au chargement du tweak).
+void SMAccentInstall(void);
+void SMAccentPick(UIViewController *from);
+
 /// Menu du profil : la ligne « Stats d'écoute » ouvre les stats SoundMatch.
 void SMDrawerInject(NSArray<UIWindow *> *windows);
 

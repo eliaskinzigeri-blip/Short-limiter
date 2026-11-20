@@ -1963,10 +1963,13 @@ BOOL SMSettingsInject(NSArray<UIWindow *> *windows, void (^calibrate)(void), voi
             return NO;
         }
         SMLearnFonts(sv);
+        __weak UIViewController *weakTarget = target;
         NSArray *rows = isEq
             ? @[@[@"Calibrer avec SoundMatch", @"Trouver mon égaliseur en comparant des versions d'un morceau", @"slider.vertical.3", calibrate],
                 @[@"Options SoundMatch", @"Saisir des valeurs, remettre l'ancien égaliseur…", @"ellipsis.circle", menu]]
-            : @[@[@"SoundMatch", @"Calibrer l'égaliseur et options", @"slider.vertical.3", menu]];
+            : @[@[@"SoundMatch", @"Calibrer l'égaliseur et options", @"slider.vertical.3", menu],
+                @[@"Couleur de l'app", @"Remplacer le vert de Spotify par la couleur de ton choix", @"paintpalette.fill",
+                  ^{ UIViewController *t = weakTarget; if (t) SMAccentPick(t); }]];
         SMInstallRows(sv, rows);
         if (![logged containsObject:name]) {
             [logged addObject:name];
