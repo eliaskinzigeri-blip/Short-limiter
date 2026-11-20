@@ -1306,7 +1306,7 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
         [imp.heightAnchor constraintEqualToConstant:44],
     ]];
 
-    _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleGrouped]; // en-têtes et « Afficher plus » fixes dans la liste
     _table.translatesAutoresizingMaskIntoConstraints = NO;
     _table.backgroundColor = SM_BG;
     _table.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -1764,7 +1764,7 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     return v;
 }
 
-- (CGFloat)tableView:(UITableView *)t heightForHeaderInSection:(NSInteger)s { return _agg.total < 1 ? 0 : 52; }
+- (CGFloat)tableView:(UITableView *)t heightForHeaderInSection:(NSInteger)s { return _agg.total < 1 ? CGFLOAT_MIN : 52; }
 
 - (UIView *)tableView:(UITableView *)t viewForFooterInSection:(NSInteger)s {
     if (_agg.total < 1) return nil;
