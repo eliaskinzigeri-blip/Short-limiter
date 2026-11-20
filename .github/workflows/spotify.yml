@@ -33,7 +33,7 @@ jobs:
           xcrun --sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=15.0 \
             -dynamiclib -fobjc-arc -fmodules -O2 -Wall -Wno-deprecated-declarations \
             -DSM_VERSION="\"1.0.$RUN\"" \
-            -framework Foundation -framework UIKit -framework AVFoundation -framework AudioToolbox -framework MediaPlayer \
+            -framework Foundation -framework UIKit -framework AVFoundation -framework AudioToolbox -framework MediaPlayer -framework UniformTypeIdentifiers \
             -install_name @rpath/SoundMatch.dylib \
             -o out/SoundMatch.dylib spotify/src/*.m spotify/src/*.c 2>&1 | tee build.log
           codesign -f -s - out/SoundMatch.dylib

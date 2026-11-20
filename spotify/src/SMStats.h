@@ -4,6 +4,7 @@
 // Fournis par SoundMatch.m
 void SMLogPublic(NSString *line);
 BOOL SMAudioLooksActive(void); // le son de Spotify passe sur cet appareil (ou aucune mesure disponible)
+int SMAudioSound(void);        // 1 : du son sort de Spotify, 0 : silence, -1 : pas de mesure (AirPlay, Connect…)
 
 /// Enregistre ce qui est écouté (titre, artiste, secondes) à partir des infos « À l'écoute » de Spotify.
 void SMStatsStart(void);

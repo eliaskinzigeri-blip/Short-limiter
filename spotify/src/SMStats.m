@@ -5,6 +5,7 @@
 // tout reste dans Documents/SoundMatch-stats.json de l'app. Les stats commencent donc à l'installation du tweak.
 #import "SMStats.h"
 #import <MediaPlayer/MediaPlayer.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -37,6 +38,20 @@ static NSString *gCurKey;
 static double gCurSec;
 static BOOL gCurCounted, gCurArtSaved;
 static NSDictionary *gLastInfo, *gHookedInfo;
+// Historique importé depuis les données que Spotify envoie sur demande (fichiers JSON) : mêmes jours que gDays
+static NSMutableDictionary *gImportDays, *gImportTracks;
+static NSString *gImportUntil; // dernier jour couvert par l'import
+
+/// « Vacra, La Rvfleuze • Lossless » → « Vacra, La Rvfleuze » (Spotify ajoute la qualité à l'artiste)
+static NSString *SMCleanArtist(NSString *a) {
+    NSRange r = [a rangeOfString:@" • "];
+    return r.location == NSNotFound ? a : [a substringToIndex:r.location];
+}
+
+static NSString *SMImportPath(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    return [docs stringByAppendingPathComponent:@"SoundMatch-import.json"];
+}
 
 static NSString *SMStatsPath(void) {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -74,6 +89,11 @@ static void SMStatsLoad(void) {
     NSDictionary *root = d ? [NSJSONSerialization JSONObjectWithData:d options:NSJSONReadingMutableContainers error:nil] : nil;
     gDays = [root[@"days"] isKindOfClass:NSMutableDictionary.class] ? root[@"days"] : [NSMutableDictionary dictionary];
     gTracks = [root[@"tracks"] isKindOfClass:NSMutableDictionary.class] ? root[@"tracks"] : [NSMutableDictionary dictionary];
+    NSData *i = [NSData dataWithContentsOfFile:SMImportPath()];
+    NSDictionary *imp = i ? [NSJSONSerialization JSONObjectWithData:i options:0 error:nil] : nil;
+    gImportDays = [imp[@"days"] isKindOfClass:NSDictionary.class] ? [imp[@"days"] mutableCopy] : nil;
+    gImportTracks = [imp[@"tracks"] isKindOfClass:NSDictionary.class] ? [imp[@"tracks"] mutableCopy] : nil;
+    gImportUntil = [imp[@"until"] isKindOfClass:NSString.class] ? imp[@"until"] : nil;
 }
 
 static void SMStatsSave(void) {
@@ -120,7 +140,13 @@ static void SMStatsTick(void) {
         if (gDirty && now - gLastSave > 20) SMStatsSave();
         return;
     }
-    NSString *artist = [info[MPMediaItemPropertyArtist] isKindOfClass:NSString.class] ? info[MPMediaItemPropertyArtist] : @"";
+    NSString *artist = SMCleanArtist([info[MPMediaItemPropertyArtist] isKindOfClass:NSString.class] ? info[MPMediaItemPropertyArtist] : @"");
+    static BOOL loggedKeys;
+    if (!loggedKeys) {
+        loggedKeys = YES;
+        SMLogPublic([NSString stringWithFormat:@"Stats : infos « À l'écoute » de Spotify : %@ (vitesse %@)",
+                     [[info.allKeys valueForKey:@"description"] componentsJoinedByString:@", "], info[MPNowPlayingInfoPropertyPlaybackRate]]);
+    }
     NSString *album = [info[MPMediaItemPropertyAlbumTitle] isKindOfClass:NSString.class] ? info[MPMediaItemPropertyAlbumTitle] : @"";
     double rate = [info[MPNowPlayingInfoPropertyPlaybackRate] doubleValue];
     NSNumber *elapsedN = info[MPNowPlayingInfoPropertyElapsedPlaybackTime];
@@ -143,7 +169,11 @@ static void SMStatsTick(void) {
     }
     SMSaveArtwork(key, info);
 
-    if (rate > 0 && dt > 0 && SMAudioLooksActive()) {
+    // En lecture : du son sort vraiment de Spotify sur l'iPhone (casque, voiture, haut-parleur) ;
+    // sans mesure du son (AirPlay, Connect…), on se fie à la vitesse de lecture annoncée par Spotify.
+    int sound = SMAudioSound();
+    BOOL playing = sound == 1 || (sound < 0 && rate > 0);
+    if (playing && dt > 0) {
         NSDate *date = [NSDate dateWithTimeIntervalSinceReferenceDate:now];
         NSMutableDictionary *day = SMDayEntry(date);
         day[@"tot"] = @([day[@"tot"] doubleValue] + dt);
@@ -303,7 +333,8 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     NSMutableDictionary<NSString *, NSMutableArray *> *tracks = [NSMutableDictionary dictionary];
     double total = 0;
     for (NSDate *d = start; [d compare:end] == NSOrderedAscending; d = [cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:d options:0]) {
-        NSDictionary *day = gDays[[SMDayFormatter() stringFromDate:d]];
+        NSString *dk = [SMDayFormatter() stringFromDate:d];
+        NSDictionary *day = gImportDays[dk] ?: gDays[dk]; // jour importé de Spotify en priorité (plus complet)
         if (![day isKindOfClass:NSDictionary.class]) continue;
         double tot = [day[@"tot"] doubleValue];
         total += tot;
@@ -335,9 +366,9 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
         long p = [tracks[k][1] integerValue];
         if (sec < 1) continue;
         plays += p;
-        NSDictionary *meta = gTracks[k];
+        NSDictionary *meta = gTracks[k] ?: gImportTracks[k];
         NSString *t = meta[@"t"] ?: [k componentsSeparatedByString:@"—"].firstObject;
-        NSString *a = meta[@"a"] ?: @"";
+        NSString *a = SMCleanArtist(meta[@"a"] ?: @"");
         [trackList addObject:@{@"t": t, @"a": a, @"key": k, @"sec": @(sec), @"plays": @(p)}];
         for (NSString *name in SMSplitArtists(a)) {
             NSMutableDictionary *ar = artists[name];
@@ -366,6 +397,102 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     agg.buckets = b;
     agg.bucketLabels = labels;
     return agg;
+}
+
+#pragma mark - Historique envoyé par Spotify
+
+static NSDate *SMParseStreamDate(NSString *s) {
+    static NSISO8601DateFormatter *iso;
+    static NSDateFormatter *plain;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        iso = [NSISO8601DateFormatter new];
+        plain = [NSDateFormatter new];
+        plain.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        plain.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+        plain.dateFormat = @"yyyy-MM-dd HH:mm";
+    });
+    @synchronized (iso) {
+        return [iso dateFromString:s] ?: [plain dateFromString:s];
+    }
+}
+
+/// Fichiers JSON de Spotify : historique étendu (ts, ms_played, master_metadata_…) ou données du compte
+/// (endTime, msPlayed, artistName, trackName). Chaque écoute est rangée au jour et à l'heure où elle s'est terminée.
+static NSDictionary *SMReadSpotifyHistory(NSArray<NSURL *> *urls) {
+    NSMutableDictionary *days = [NSMutableDictionary dictionary], *tracks = [NSMutableDictionary dictionary];
+    NSDateFormatter *dayF = [NSDateFormatter new];
+    dayF.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    dayF.dateFormat = @"yyyy-MM-dd";
+    NSCalendar *cal = NSCalendar.currentCalendar;
+    long streams = 0;
+    int files = 0;
+    NSDate *first = nil, *last = nil;
+    for (NSURL *url in urls) {
+        BOOL scoped = [url startAccessingSecurityScopedResource];
+        NSData *data = [NSData dataWithContentsOfURL:url];
+        if (scoped) [url stopAccessingSecurityScopedResource];
+        id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![json isKindOfClass:NSArray.class]) continue;
+        BOOL any = NO;
+        for (NSDictionary *it in json) {
+            if (![it isKindOfClass:NSDictionary.class]) continue;
+            id t = it[@"master_metadata_track_name"] ?: it[@"trackName"];
+            id a = it[@"master_metadata_album_artist_name"] ?: it[@"artistName"];
+            id al = it[@"master_metadata_album_album_name"];
+            id ms = it[@"ms_played"] ?: it[@"msPlayed"];
+            id ts = it[@"ts"] ?: it[@"endTime"];
+            if (![t isKindOfClass:NSString.class] || ![ts isKindOfClass:NSString.class] || ![ms isKindOfClass:NSNumber.class]) continue;
+            double sec = [ms doubleValue] / 1000.0;
+            if (sec < 1) continue;
+            NSDate *end = SMParseStreamDate(ts);
+            if (!end) continue;
+            NSString *artist = [a isKindOfClass:NSString.class] ? a : @"";
+            NSString *key = [NSString stringWithFormat:@"%@\u2014%@", t, artist];
+            NSString *dk = [dayF stringFromDate:end];
+            NSMutableDictionary *day = days[dk];
+            if (!day) {
+                NSMutableArray *hours = [NSMutableArray array];
+                for (int i = 0; i < 24; i++) [hours addObject:@0];
+                day = [@{@"tot": @0, @"h": hours, @"tr": [NSMutableDictionary dictionary]} mutableCopy];
+                days[dk] = day;
+            }
+            day[@"tot"] = @([day[@"tot"] doubleValue] + sec);
+            NSInteger hour = [cal component:NSCalendarUnitHour fromDate:end];
+            NSMutableArray *hours = day[@"h"];
+            hours[hour] = @([hours[hour] doubleValue] + sec);
+            NSMutableDictionary *tr = day[@"tr"];
+            NSMutableArray *e = tr[key];
+            if (!e) { e = [@[@0, @0] mutableCopy]; tr[key] = e; }
+            e[0] = @([e[0] doubleValue] + sec);
+            if (sec >= 30) e[1] = @([e[1] integerValue] + 1);
+            if (!tracks[key]) tracks[key] = @{@"t": t, @"a": artist, @"al": [al isKindOfClass:NSString.class] ? al : @""};
+            if (!first || [end compare:first] == NSOrderedAscending) first = end;
+            if (!last || [end compare:last] == NSOrderedDescending) last = end;
+            streams++;
+            any = YES;
+        }
+        if (any) files++;
+    }
+    return @{@"days": days, @"tracks": tracks, @"streams": @(streams), @"files": @(files),
+             @"from": first ? [dayF stringFromDate:first] : @"", @"until": last ? [dayF stringFromDate:last] : @""};
+}
+
+/// Pochette d'un titre ; pour un titre importé (sans pochette), celle du même titre écouté sur l'iPhone.
+static NSString *SMArtFor(NSString *key, NSString *title) {
+    NSString *p = SMArtPath(key);
+    if ([NSFileManager.defaultManager fileExistsAtPath:p]) return p;
+    NSString *low = title.lowercaseString;
+    NSString *artistPart = [key componentsSeparatedByString:@"\u2014"].lastObject.lowercaseString;
+    for (NSString *k in gTracks) {
+        NSDictionary *m = gTracks[k];
+        BOOL sameTitle = low && [[m[@"t"] lowercaseString] isEqualToString:low];
+        BOOL sameArtist = !low && artistPart.length && [[m[@"a"] lowercaseString] hasPrefix:artistPart];
+        if (!sameTitle && !sameArtist) continue;
+        NSString *q = SMArtPath(k);
+        if ([NSFileManager.defaultManager fileExistsAtPath:q]) return q;
+    }
+    return nil;
 }
 
 #pragma mark - Graphique
@@ -453,7 +580,7 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
 
 #pragma mark - Écran « Stats d'écoute »
 
-@interface SMStatsController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@interface SMStatsController : UIViewController <UITableViewDataSource, UITableViewDelegate, UIDocumentPickerDelegate>
 @end
 
 @implementation SMStatsController {
@@ -493,6 +620,18 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     title.font = SMFont(17, YES);
     title.textColor = UIColor.whiteColor;
     [_bar addSubview:title];
+    UIButton *imp = [UIButton buttonWithType:UIButtonTypeSystem];
+    imp.translatesAutoresizingMaskIntoConstraints = NO;
+    [imp setImage:[UIImage systemImageNamed:@"square.and.arrow.down" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    imp.tintColor = UIColor.whiteColor;
+    [imp addTarget:self action:@selector(importTapped) forControlEvents:UIControlEventTouchUpInside];
+    [_bar addSubview:imp];
+    [NSLayoutConstraint activateConstraints:@[
+        [imp.trailingAnchor constraintEqualToAnchor:_bar.trailingAnchor constant:-8],
+        [imp.centerYAnchor constraintEqualToAnchor:_bar.centerYAnchor],
+        [imp.widthAnchor constraintEqualToConstant:44],
+        [imp.heightAnchor constraintEqualToConstant:44],
+    ]];
 
     _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     _table.translatesAutoresizingMaskIntoConstraints = NO;
@@ -517,7 +656,6 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
         [back.heightAnchor constraintEqualToConstant:44],
         [title.centerXAnchor constraintEqualToAnchor:_bar.centerXAnchor],
         [title.centerYAnchor constraintEqualToAnchor:_bar.centerYAnchor],
-        [_table.topAnchor constraintEqualToAnchor:_bar.bottomAnchor],
         [_table.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_table.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_table.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -591,24 +729,34 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     _chart.backgroundColor = SM_BG;
     [_chart.heightAnchor constraintEqualToConstant:110].active = YES;
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[pillRow, nav, _headline, _summary, _chart]];
+    // Filtres et période fixes sous la barre du haut (ils ne défilent pas avec la liste)
+    UIView *filters = [UIView new];
+    filters.translatesAutoresizingMaskIntoConstraints = NO;
+    filters.backgroundColor = SM_BG;
+    pillRow.translatesAutoresizingMaskIntoConstraints = NO;
+    nav.translatesAutoresizingMaskIntoConstraints = NO;
+    [filters addSubview:pillRow];
+    [filters addSubview:nav];
+    [self.view addSubview:filters];
+    [NSLayoutConstraint activateConstraints:@[
+        [filters.topAnchor constraintEqualToAnchor:_bar.bottomAnchor],
+        [filters.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [filters.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [pillRow.topAnchor constraintEqualToAnchor:filters.topAnchor constant:4],
+        [pillRow.leadingAnchor constraintEqualToAnchor:filters.leadingAnchor constant:16],
+        [pillRow.trailingAnchor constraintLessThanOrEqualToAnchor:filters.trailingAnchor constant:-16],
+        [nav.topAnchor constraintEqualToAnchor:pillRow.bottomAnchor constant:8],
+        [nav.leadingAnchor constraintEqualToAnchor:filters.leadingAnchor constant:8],
+        [nav.trailingAnchor constraintEqualToAnchor:filters.trailingAnchor constant:-8],
+        [nav.bottomAnchor constraintEqualToAnchor:filters.bottomAnchor constant:-2],
+        [_table.topAnchor constraintEqualToAnchor:filters.bottomAnchor],
+    ]];
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_headline, _summary, _chart]];
     stack.axis = UILayoutConstraintAxisVertical;
     stack.alignment = UIStackViewAlignmentFill;
-    stack.spacing = 14;
-    [stack setCustomSpacing:6 afterView:_headline];
+    stack.spacing = 6;
     [stack setCustomSpacing:22 afterView:_summary];
-    pillRow.alignment = UIStackViewAlignmentLeading;
-    UIView *pillHolder = [UIView new];
-    [stack insertArrangedSubview:pillHolder atIndex:0];
-    [stack removeArrangedSubview:pillRow];
-    [pillHolder addSubview:pillRow];
-    pillRow.translatesAutoresizingMaskIntoConstraints = NO;
-    [NSLayoutConstraint activateConstraints:@[
-        [pillRow.leadingAnchor constraintEqualToAnchor:pillHolder.leadingAnchor],
-        [pillRow.topAnchor constraintEqualToAnchor:pillHolder.topAnchor],
-        [pillRow.bottomAnchor constraintEqualToAnchor:pillHolder.bottomAnchor],
-        [pillRow.trailingAnchor constraintLessThanOrEqualToAnchor:pillHolder.trailingAnchor],
-    ]];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [header addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
@@ -670,7 +818,14 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     [parts addObject:[NSString stringWithFormat:@"%lu titre%@", (unsigned long)_agg.tracks.count, _agg.tracks.count > 1 ? @"s" : @""]];
     [parts addObject:[NSString stringWithFormat:@"%lu artiste%@", (unsigned long)_agg.artists.count, _agg.artists.count > 1 ? @"s" : @""]];
     [parts addObject:[NSString stringWithFormat:@"%ld écoute%@", _agg.plays, _agg.plays > 1 ? @"s" : @""]];
-    _summary.text = [parts componentsJoinedByString:@" · "];
+    NSString *summary = [parts componentsJoinedByString:@" · "];
+    if (gImportUntil) {
+        NSDate *u = [SMDayFormatter() dateFromString:gImportUntil];
+        summary = [summary stringByAppendingFormat:@"\nHistorique Spotify importé jusqu'au %@, puis relevé sur l'iPhone", u ? SMFr(@"d MMMM yyyy", u) : gImportUntil];
+    } else if (_agg.total < 1 || _range >= SMRangeMonth) {
+        summary = [summary stringByAppendingString:@"\nPour tout ton historique Spotify : bouton ⬇︎ en haut à droite"];
+    }
+    _summary.text = summary;
 
     _chart.values = _agg.buckets;
     _chart.labels = _agg.bucketLabels;
@@ -693,6 +848,67 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     [super viewDidLayoutSubviews];
     UIView *header = _table.tableHeaderView;
     if (header && fabs(header.bounds.size.width - _table.bounds.size.width) > 1) [self reload];
+}
+
+#pragma mark Import de l'historique Spotify
+
+- (void)importTapped {
+    NSString *msg = @"Spotify garde tout ton historique d'écoute avec les minutes, mais ne le donne que sur demande :\n\n"
+        "1. Sur spotify.com (navigateur) : Profil › Compte › Confidentialité du compte, coche « Historique de streaming étendu » "
+        "(tout depuis la création du compte) et/ou « Données du compte » (la dernière année), puis Demander les données.\n"
+        "2. Spotify t'envoie un mail avec un fichier .zip (quelques jours ; jusqu'à 30 jours pour l'historique étendu).\n"
+        "3. Enregistre-le dans Fichiers et touche-le pour le décompresser.\n"
+        "4. Ici : Choisir les fichiers, puis sélectionne TOUS les fichiers Streaming_History_Audio_….json "
+        "(ou StreamingHistory_music_….json).";
+    if (gImportUntil) msg = [msg stringByAppendingFormat:@"\n\nHistorique actuel importé jusqu'au %@.", gImportUntil];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Importer mon historique Spotify" message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Choisir les fichiers" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+        NSArray *types = @[UTTypeJSON, UTTypePlainText, UTTypeData];
+        UIDocumentPickerViewController *pk = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+        pk.allowsMultipleSelection = YES;
+        pk.delegate = self;
+        [self presentViewController:pk animated:YES completion:nil];
+    }]];
+    if (gImportDays) {
+        [a addAction:[UIAlertAction actionWithTitle:@"Supprimer l'historique importé" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) {
+            gImportDays = nil;
+            gImportTracks = nil;
+            gImportUntil = nil;
+            [NSFileManager.defaultManager removeItemAtPath:SMImportPath() error:nil];
+            SMLogPublic(@"Stats : historique importé supprimé");
+            [self reload];
+        }]];
+    }
+    [a addAction:[UIAlertAction actionWithTitle:@"Annuler" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)picker didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    _summary.text = @"Import en cours…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary *res = SMReadSpotifyHistory(urls);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            long streams = [res[@"streams"] longValue];
+            NSString *text;
+            if (streams > 0) {
+                gImportDays = [res[@"days"] mutableCopy];
+                gImportTracks = [res[@"tracks"] mutableCopy];
+                gImportUntil = res[@"until"];
+                NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"days": gImportDays, @"tracks": gImportTracks, @"until": gImportUntil} options:0 error:nil];
+                [d writeToFile:SMImportPath() atomically:YES];
+                text = [NSString stringWithFormat:@"%@ écoutes importées (%@ fichier%@), du %@ au %@.", SMGroup(streams), res[@"files"],
+                        [res[@"files"] intValue] > 1 ? @"s" : @"", res[@"from"], res[@"until"]];
+            } else {
+                text = [NSString stringWithFormat:@"Aucune écoute trouvée dans ces %lu fichier(s). Choisis les fichiers Streaming_History_Audio_….json ou StreamingHistory_music_….json (décompresse d'abord le .zip).", (unsigned long)urls.count];
+            }
+            SMLogPublic([@"Stats : import — " stringByAppendingString:text]);
+            [self reload];
+            UIAlertController *a = [UIAlertController alertControllerWithTitle:streams > 0 ? @"Historique importé" : @"Import impossible"
+                                                                       message:text preferredStyle:UIAlertControllerStyleAlert];
+            [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:a animated:YES completion:nil];
+        });
+    });
 }
 
 #pragma mark Table
@@ -738,7 +954,7 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
         c.sub.text = [NSString stringWithFormat:@"%@ · %ld écoute%@", it[@"a"], plays, plays > 1 ? @"s" : @""];
         c.art.layer.cornerRadius = 4;
     }
-    c.art.image = [UIImage imageWithContentsOfFile:SMArtPath(it[@"key"])];
+    c.art.image = [UIImage imageWithContentsOfFile:SMArtFor(it[@"key"], ip.section == 0 ? nil : it[@"t"])];
     [c setNeedsLayout];
     return c;
 }
@@ -922,14 +1138,10 @@ static void SMInstallRows(UIScrollView *sv, NSArray<NSArray *> *rows) {
 }
 
 static void SMOpenStats(UIViewController *from) {
+    // Plein écran : la barre et le lecteur de Spotify ne se superposent pas à l'écran des stats
     UIViewController *stats = SMStatsMakeController();
-    UINavigationController *nav = from.navigationController;
-    if (nav) {
-        [nav pushViewController:stats animated:YES];
-    } else {
-        stats.modalPresentationStyle = UIModalPresentationFullScreen;
-        [from presentViewController:stats animated:YES completion:nil];
-    }
+    stats.modalPresentationStyle = UIModalPresentationFullScreen;
+    [from presentViewController:stats animated:YES completion:nil];
 }
 
 BOOL SMSettingsInject(NSArray<UIWindow *> *windows, void (^calibrate)(void), void (^menu)(void)) {

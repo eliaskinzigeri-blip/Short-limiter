@@ -15,8 +15,15 @@ Paramètres de Spotify → ligne **Stats d'écoute** (ajoutée en haut de la lis
 - **Top artistes** et **Top titres** avec les minutes et le nombre d'écoutes de chacun (« Afficher plus » : 50).
 
 Les écoutes sont relevées sur l'appareil à partir des infos « À l'écoute » de Spotify (titre, artiste, pochette),
-seulement pendant la lecture. Une écoute compte à partir de 30 s. Tout reste dans
-`Documents/SoundMatch-stats.json` de l'app : les stats commencent à l'installation du tweak (pas d'historique avant).
+seulement quand du son sort vraiment de Spotify. Une écoute compte à partir de 30 s. Tout reste dans
+`Documents/SoundMatch-stats.json` de l'app.
+
+**Tout l'historique de Spotify** (avec les minutes) : Spotify ne le donne que sur demande. Sur spotify.com :
+Compte › Confidentialité du compte › « Historique de streaming étendu » (depuis la création du compte) et/ou
+« Données du compte » (dernière année) › Demander les données. Le mail contient un .zip : décompresse-le dans
+Fichiers, puis dans Stats d'écoute touche ⬇︎ › Choisir les fichiers et sélectionne tous les
+`Streaming_History_Audio_….json` (ou `StreamingHistory_music_….json`). Les jours importés remplacent le relevé de
+l'iPhone ; après la date de l'export, c'est le relevé de l'iPhone qui continue.
 
 ## Comment ça marche
 

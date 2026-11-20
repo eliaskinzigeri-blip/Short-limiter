@@ -70,6 +70,13 @@ static float gGains[SM_BANDS];          // gains appliqués (dB)
 static volatile int gVersion = 1;       // change à chaque nouveau réglage
 static volatile int gActive = 0;        // égaliseur appliqué (test en cours ou réglage activé)
 static volatile double gLastRender = 0; // dernier passage du son (CFAbsoluteTime)
+static volatile double gLastSound = 0;  // dernier passage de son non silencieux (stats d'écoute)
+
+int SMAudioSound(void) {
+    double now = CFAbsoluteTimeGetCurrent();
+    if (gLastRender == 0 || now - gLastRender > 5) return -1; // la sortie de l'iPhone n'est pas utilisée
+    return now - gLastSound < 2.5 ? 1 : 0;
+}
 
 BOOL SMAudioLooksActive(void) {
     if (gLastRender == 0) return YES; // pas encore de mesure du son : on se fie à « en lecture »
@@ -190,6 +197,19 @@ static OSStatus SMNotify(void *refCon, AudioUnitRenderActionFlags *flags, const 
                        (fl & kAudioFormatFlagIsNonInterleaved) ? @"canaux séparés" : @"canaux entrelacés",
                        u->badFmt ? @" — format non pris en charge" : @""]);
         }
+    }
+    // Son ou silence (pause) : quelques échantillons suffisent
+    if (!u->badFmt && io->mNumberBuffers > 0 && io->mBuffers[0].mData && frames > 0) {
+        UInt32 n = io->mBuffers[0].mDataByteSize / ((u->fmt.mFormatFlags & kAudioFormatFlagIsFloat) ? 4 : 2);
+        BOOL loud = NO;
+        if (u->fmt.mFormatFlags & kAudioFormatFlagIsFloat) {
+            const float *p = io->mBuffers[0].mData;
+            for (UInt32 i = 0; i < n && !loud; i += 16) loud = fabsf(p[i]) > 1e-4f;
+        } else {
+            const SInt16 *p = io->mBuffers[0].mData;
+            for (UInt32 i = 0; i < n && !loud; i += 16) loud = abs(p[i]) > 3;
+        }
+        if (loud) gLastSound = CFAbsoluteTimeGetCurrent();
     }
     if (!gActive || u->badFmt) return noErr;
     if (u->version != gVersion) SMDesign(u);
