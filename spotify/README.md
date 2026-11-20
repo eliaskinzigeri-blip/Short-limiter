@@ -18,6 +18,14 @@ Les écoutes sont relevées sur l'appareil à partir des infos « À l'écoute �
 seulement quand du son sort vraiment de Spotify. Une écoute compte à partir de 30 s. Tout reste dans
 `Documents/SoundMatch-stats.json` de l'app.
 
+**Données du compte Spotify, récupérées par le tweak** : avec la connexion de l'app (le jeton que Spotify envoie
+avec ses propres requêtes, gardé en mémoire seulement, jamais écrit ni envoyé ailleurs qu'à Spotify) :
+
+- onglet **Classement** : top artistes et top titres calculés par Spotify sur 4 semaines, 6 mois et environ 1 an
+  (Spotify ne donne pas de minutes pour ce classement) ;
+- **dernières écoutes du compte** (tous appareils, les 50 dernières, relues toutes les 10 min quand l'app tourne) :
+  ajoutées aux minutes, avec une durée estimée jusqu'au titre suivant.
+
 **Tout l'historique de Spotify** (avec les minutes) : Spotify ne le donne que sur demande. Sur spotify.com :
 Compte › Confidentialité du compte › « Historique de streaming étendu » (depuis la création du compte) et/ou
 « Données du compte » (dernière année) › Demander les données. Le mail contient un .zip : décompresse-le dans

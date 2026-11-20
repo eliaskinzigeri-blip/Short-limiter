@@ -204,11 +204,20 @@ static void SMHookNowPlaying(void) {
     }));
 }
 
+static void SMLoadSpotifyCache(void);
+static void SMHookAuth(void);
+static void SMFetchRecent(void (^done)(void));
+
 void SMStatsStart(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         SMStatsLoad();
+        SMLoadSpotifyCache();
         SMHookNowPlaying();
+        SMHookAuth();
+        NSTimer *recent = [NSTimer timerWithTimeInterval:600 repeats:YES block:^(NSTimer *x) { SMFetchRecent(nil); }];
+        [NSRunLoop.mainRunLoop addTimer:recent forMode:NSRunLoopCommonModes];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ SMFetchRecent(nil); });
         NSTimer *t = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *x) { SMStatsTick(); }];
         [NSRunLoop.mainRunLoop addTimer:t forMode:NSRunLoopCommonModes];
         for (NSNotificationName n in @[UIApplicationWillResignActiveNotification, UIApplicationDidEnterBackgroundNotification,
@@ -221,9 +230,267 @@ void SMStatsStart(void) {
     });
 }
 
+#pragma mark - Données du compte Spotify (connexion de l'app)
+
+// L'app Spotify envoie son jeton de connexion avec ses requêtes : on le relève pour lire, avec le même compte,
+// le classement Spotify (top artistes / titres) et les dernières écoutes (tous appareils). Il reste en mémoire.
+static NSString *gToken;
+static NSMutableDictionary *gSpotifyTop;          // short_term / medium_term / long_term → { artists, tracks }
+static NSDate *gSpotifyTopAt;
+static NSString *gSpotifyStatus;
+static BOOL gFetchingTop;
+static NSMutableDictionary *gRecentDays, *gRecentTracks; // dernières écoutes données par Spotify, par jour
+static NSMutableArray *gRecentSeen;               // played_at déjà comptés
+static CFAbsoluteTime gRecentAt;
+
+static NSString *SMHex(NSString *str) {
+    uint64_t h = 1469598103934665603ULL;
+    for (const unsigned char *c = (const unsigned char *)str.UTF8String; *c; c++) { h ^= *c; h *= 1099511628211ULL; }
+    return [NSString stringWithFormat:@"%016llx", h];
+}
+
+static NSString *SMDocPath(NSString *name) {
+    return [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:name];
+}
+
+static void SMSeeAuth(NSURLRequest *r, NSString *field, NSString *value) {
+    if (![field.lowercaseString isEqualToString:@"authorization"] || ![value hasPrefix:@"Bearer "] || value.length < 40) return;
+    NSString *host = r.URL.host.lowercaseString ?: @"";
+    if (host.length && ![host containsString:@"spotify"] && ![host containsString:@"scdn"]) return;
+    NSString *tok = [value substringFromIndex:7];
+    if ([tok isEqualToString:gToken]) return;
+    BOOL first = gToken == nil;
+    gToken = tok;
+    if (first) SMLogPublic([NSString stringWithFormat:@"Stats : connexion Spotify trouvée (requête vers %@)", host.length ? host : @"?"]);
+}
+
+static void SMHookAuth(void) {
+    Class c = NSMutableURLRequest.class;
+    SEL sels[] = {@selector(setValue:forHTTPHeaderField:), @selector(addValue:forHTTPHeaderField:)};
+    for (int i = 0; i < 2; i++) {
+        SEL sel = sels[i];
+        Method m = class_getInstanceMethod(c, sel);
+        if (!m) continue;
+        void (*orig)(id, SEL, NSString *, NSString *) = (void *)method_getImplementation(m);
+        method_setImplementation(m, imp_implementationWithBlock(^(NSMutableURLRequest *self, NSString *value, NSString *field) {
+            orig(self, sel, value, field);
+            if ([value isKindOfClass:NSString.class] && [field isKindOfClass:NSString.class]) SMSeeAuth(self, field, value);
+        }));
+    }
+    Method m = class_getInstanceMethod(c, @selector(setAllHTTPHeaderFields:));
+    if (m) {
+        void (*orig)(id, SEL, NSDictionary *) = (void *)method_getImplementation(m);
+        method_setImplementation(m, imp_implementationWithBlock(^(NSMutableURLRequest *self, NSDictionary *all) {
+            orig(self, @selector(setAllHTTPHeaderFields:), all);
+            for (NSString *k in all) if ([all[k] isKindOfClass:NSString.class]) SMSeeAuth(self, k, all[k]);
+        }));
+    }
+    // Sessions avec en-têtes communs
+    Method cm = class_getInstanceMethod(NSURLSessionConfiguration.class, @selector(setHTTPAdditionalHeaders:));
+    if (cm) {
+        void (*orig)(id, SEL, NSDictionary *) = (void *)method_getImplementation(cm);
+        method_setImplementation(cm, imp_implementationWithBlock(^(id self, NSDictionary *all) {
+            orig(self, @selector(setHTTPAdditionalHeaders:), all);
+            for (id k in all) if ([k isKindOfClass:NSString.class] && [all[k] isKindOfClass:NSString.class]) SMSeeAuth(nil, k, all[k]);
+        }));
+    }
+}
+
+static void SMApiGet(NSString *path, void (^done)(id json, NSInteger status)) {
+    if (!gToken) { done(nil, 0); return; }
+    NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[@"https://api.spotify.com/v1/" stringByAppendingString:path]]];
+    [r setValue:[@"Bearer " stringByAppendingString:gToken] forHTTPHeaderField:@"Authorization"];
+    r.timeoutInterval = 20;
+    [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *resp, NSError *e) {
+        NSInteger st = [resp isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)resp).statusCode : -1;
+        id json = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ done(st == 200 ? json : nil, st); });
+    }] resume];
+}
+
+static NSString *SMImageURL(NSArray *images) {
+    if (![images isKindOfClass:NSArray.class] || !images.count) return nil;
+    NSDictionary *best = images.firstObject; // les images vont de la plus grande à la plus petite
+    for (NSDictionary *im in images) if ([im[@"width"] integerValue] >= 160) best = im;
+    return [best[@"url"] isKindOfClass:NSString.class] ? best[@"url"] : nil;
+}
+
+static void SMSaveSpotifyCache(void) {
+    if (gSpotifyTop) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"top": gSpotifyTop, @"at": @(gSpotifyTopAt.timeIntervalSince1970)} options:0 error:nil];
+        [d writeToFile:SMDocPath(@"SoundMatch-top.json") atomically:YES];
+    }
+    if (gRecentDays) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"days": gRecentDays, @"tracks": gRecentTracks ?: @{}, @"seen": gRecentSeen ?: @[]} options:0 error:nil];
+        [d writeToFile:SMDocPath(@"SoundMatch-recent.json") atomically:YES];
+    }
+}
+
+static void SMLoadSpotifyCache(void) {
+    NSData *d = [NSData dataWithContentsOfFile:SMDocPath(@"SoundMatch-top.json")];
+    NSDictionary *root = d ? [NSJSONSerialization JSONObjectWithData:d options:NSJSONReadingMutableContainers error:nil] : nil;
+    if ([root[@"top"] isKindOfClass:NSMutableDictionary.class]) {
+        gSpotifyTop = root[@"top"];
+        gSpotifyTopAt = [NSDate dateWithTimeIntervalSince1970:[root[@"at"] doubleValue]];
+    }
+    d = [NSData dataWithContentsOfFile:SMDocPath(@"SoundMatch-recent.json")];
+    root = d ? [NSJSONSerialization JSONObjectWithData:d options:NSJSONReadingMutableContainers error:nil] : nil;
+    gRecentDays = [root[@"days"] isKindOfClass:NSMutableDictionary.class] ? root[@"days"] : [NSMutableDictionary dictionary];
+    gRecentTracks = [root[@"tracks"] isKindOfClass:NSMutableDictionary.class] ? root[@"tracks"] : [NSMutableDictionary dictionary];
+    gRecentSeen = [root[@"seen"] isKindOfClass:NSMutableArray.class] ? root[@"seen"] : [NSMutableArray array];
+}
+
+/// Classement Spotify : top artistes et titres sur 4 semaines, 6 mois et environ 1 an.
+static void SMFetchTop(void (^done)(void)) {
+    if (gFetchingTop) return;
+    if (!gToken) {
+        gSpotifyStatus = @"Connexion Spotify pas encore trouvée : ouvre l'accueil ou une playlist de Spotify, puis reviens ici.";
+        if (done) done();
+        return;
+    }
+    gFetchingTop = YES;
+    NSArray *terms = @[@"short_term", @"medium_term", @"long_term"];
+    NSMutableDictionary *res = [NSMutableDictionary dictionary];
+    __block int pending = 6;
+    __block NSInteger lastError = 0;
+    void (^finish)(void) = ^{
+        if (--pending > 0) return;
+        gFetchingTop = NO;
+        if (res.count) {
+            if (!gSpotifyTop) gSpotifyTop = [NSMutableDictionary dictionary];
+            for (NSString *k in res) gSpotifyTop[k] = res[k];
+            gSpotifyTopAt = NSDate.date;
+            gSpotifyStatus = nil;
+            SMSaveSpotifyCache();
+            SMLogPublic(@"Stats : classement Spotify mis à jour");
+        } else {
+            gSpotifyStatus = [NSString stringWithFormat:@"Spotify refuse la lecture du classement (code %ld).", (long)lastError];
+            SMLogPublic([@"Stats : " stringByAppendingString:gSpotifyStatus]);
+        }
+        if (done) done();
+    };
+    for (NSString *term in terms) {
+        SMApiGet([NSString stringWithFormat:@"me/top/artists?limit=50&time_range=%@", term], ^(NSDictionary *json, NSInteger st) {
+            if (json) {
+                NSMutableArray *list = [NSMutableArray array];
+                for (NSDictionary *a in json[@"items"]) {
+                    if (![a isKindOfClass:NSDictionary.class] || ![a[@"name"] isKindOfClass:NSString.class]) continue;
+                    NSArray *genres = [a[@"genres"] isKindOfClass:NSArray.class] ? a[@"genres"] : @[];
+                    [list addObject:@{@"name": a[@"name"], @"img": SMImageURL(a[@"images"]) ?: @"",
+                                      @"sub": [[genres subarrayWithRange:NSMakeRange(0, MIN(2, genres.count))] componentsJoinedByString:@", "]}];
+                }
+                NSMutableDictionary *e = [res[term] mutableCopy] ?: [NSMutableDictionary dictionary];
+                e[@"artists"] = list;
+                res[term] = e;
+            } else lastError = st;
+            finish();
+        });
+        SMApiGet([NSString stringWithFormat:@"me/top/tracks?limit=50&time_range=%@", term], ^(NSDictionary *json, NSInteger st) {
+            if (json) {
+                NSMutableArray *list = [NSMutableArray array];
+                for (NSDictionary *t in json[@"items"]) {
+                    if (![t isKindOfClass:NSDictionary.class] || ![t[@"name"] isKindOfClass:NSString.class]) continue;
+                    NSArray *names = [t[@"artists"] isKindOfClass:NSArray.class] ? [t[@"artists"] valueForKey:@"name"] : @[];
+                    [list addObject:@{@"t": t[@"name"], @"a": [names componentsJoinedByString:@", "],
+                                      @"img": SMImageURL(t[@"album"][@"images"]) ?: @""}];
+                }
+                NSMutableDictionary *e = [res[term] mutableCopy] ?: [NSMutableDictionary dictionary];
+                e[@"tracks"] = list;
+                res[term] = e;
+            } else lastError = st;
+            finish();
+        });
+    }
+}
+
+/// Dernières écoutes du compte (50, tous appareils) ajoutées aux stats ; durée estimée jusqu'au titre suivant.
+static void SMFetchRecent(void (^done)(void)) {
+    if (!gToken || CFAbsoluteTimeGetCurrent() - gRecentAt < 60) { if (done) done(); return; }
+    gRecentAt = CFAbsoluteTimeGetCurrent();
+    SMApiGet(@"me/player/recently-played?limit=50", ^(NSDictionary *json, NSInteger st) {
+        if (!json) {
+            SMLogPublic([NSString stringWithFormat:@"Stats : dernières écoutes refusées par Spotify (code %ld)", (long)st]);
+            if (done) done();
+            return;
+        }
+        NSISO8601DateFormatter *iso = [NSISO8601DateFormatter new];
+        iso.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
+        NSISO8601DateFormatter *iso2 = [NSISO8601DateFormatter new];
+        NSMutableArray *items = [NSMutableArray array];
+        for (NSDictionary *it in json[@"items"]) {
+            if (![it isKindOfClass:NSDictionary.class] || ![it[@"played_at"] isKindOfClass:NSString.class]) continue;
+            NSDate *at = [iso dateFromString:it[@"played_at"]] ?: [iso2 dateFromString:it[@"played_at"]];
+            NSDictionary *t = it[@"track"];
+            if (!at || ![t isKindOfClass:NSDictionary.class] || ![t[@"name"] isKindOfClass:NSString.class]) continue;
+            [items addObject:@{@"at": at, @"id": it[@"played_at"], @"t": t}];
+        }
+        [items sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"at" ascending:YES]]];
+        NSCalendar *cal = NSCalendar.currentCalendar;
+        int added = 0;
+        for (NSUInteger i = 0; i < items.count; i++) {
+            NSDictionary *it = items[i];
+            if ([gRecentSeen containsObject:it[@"id"]]) continue;
+            NSDictionary *t = it[@"t"];
+            NSDate *at = it[@"at"];
+            double dur = [t[@"duration_ms"] doubleValue] / 1000.0;
+            double sec = dur;
+            if (i + 1 < items.count) {
+                double gap = [items[i + 1][@"at"] timeIntervalSinceDate:at];
+                if (gap > 0 && gap < dur) sec = gap;
+            }
+            if (sec < 1) continue;
+            NSArray *names = [t[@"artists"] isKindOfClass:NSArray.class] ? [t[@"artists"] valueForKey:@"name"] : @[];
+            NSString *artist = [names componentsJoinedByString:@", "];
+            NSString *key = [NSString stringWithFormat:@"%@\u2014%@", t[@"name"], artist];
+            NSString *dk = [SMDayFormatter() stringFromDate:at];
+            NSMutableDictionary *day = gRecentDays[dk];
+            if (![day isKindOfClass:NSMutableDictionary.class]) {
+                NSMutableArray *hours = [NSMutableArray array];
+                for (int h = 0; h < 24; h++) [hours addObject:@0];
+                day = [@{@"tot": @0, @"h": hours, @"tr": [NSMutableDictionary dictionary]} mutableCopy];
+                gRecentDays[dk] = day;
+            }
+            day[@"tot"] = @([day[@"tot"] doubleValue] + sec);
+            NSMutableArray *hours = day[@"h"];
+            NSInteger hour = [cal component:NSCalendarUnitHour fromDate:at];
+            hours[hour] = @([hours[hour] doubleValue] + sec);
+            NSMutableDictionary *tr = day[@"tr"];
+            NSMutableArray *e = tr[key];
+            if (![e isKindOfClass:NSMutableArray.class]) { e = [@[@0, @0] mutableCopy]; tr[key] = e; }
+            e[0] = @([e[0] doubleValue] + sec);
+            e[1] = @([e[1] integerValue] + 1);
+            if (!gRecentTracks[key])
+                gRecentTracks[key] = @{@"t": t[@"name"], @"a": artist, @"img": SMImageURL(t[@"album"][@"images"]) ?: @""};
+            [gRecentSeen addObject:it[@"id"]];
+            added++;
+        }
+        while (gRecentSeen.count > 600) [gRecentSeen removeObjectAtIndex:0];
+        if (added) {
+            SMSaveSpotifyCache();
+            SMLogPublic([NSString stringWithFormat:@"Stats : %d écoute(s) récupérée(s) depuis le compte Spotify", added]);
+        }
+        if (done) done();
+    });
+}
+
+/// Image en ligne (pochette, photo d'artiste), gardée en cache.
+static void SMLoadRemote(NSString *url, UIImageView *iv) {
+    iv.accessibilityIdentifier = url;
+    if (!url.length) return;
+    NSString *path = [SMArtDir() stringByAppendingPathComponent:[SMHex(url) stringByAppendingString:@".img"]];
+    UIImage *img = [UIImage imageWithContentsOfFile:path];
+    if (img) { iv.image = img; return; }
+    [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:url] completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        UIImage *im = d ? [UIImage imageWithData:d] : nil;
+        if (!im) return;
+        [d writeToFile:path atomically:YES];
+        dispatch_async(dispatch_get_main_queue(), ^{ if ([iv.accessibilityIdentifier isEqualToString:url]) iv.image = im; });
+    }] resume];
+}
+
 #pragma mark - Périodes et calculs
 
-typedef NS_ENUM(NSInteger, SMRange) { SMRangeDay, SMRangeWeek, SMRangeMonth, SMRangeYear };
+typedef NS_ENUM(NSInteger, SMRange) { SMRangeDay, SMRangeWeek, SMRangeMonth, SMRangeYear, SMRangeSpotify };
 
 static NSCalendar *SMCal(void) {
     static NSCalendar *c;
@@ -334,7 +601,9 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
     double total = 0;
     for (NSDate *d = start; [d compare:end] == NSOrderedAscending; d = [cal dateByAddingUnit:NSCalendarUnitDay value:1 toDate:d options:0]) {
         NSString *dk = [SMDayFormatter() stringFromDate:d];
-        NSDictionary *day = gImportDays[dk] ?: gDays[dk]; // jour importé de Spotify en priorité (plus complet)
+        // Jour importé en priorité, sinon le plus complet entre le relevé de l'iPhone et les dernières écoutes du compte
+        NSDictionary *loc = gDays[dk], *rec = gRecentDays[dk];
+        NSDictionary *day = gImportDays[dk] ?: ([rec[@"tot"] doubleValue] > [loc[@"tot"] doubleValue] ? rec : loc);
         if (![day isKindOfClass:NSDictionary.class]) continue;
         double tot = [day[@"tot"] doubleValue];
         total += tot;
@@ -366,16 +635,17 @@ static SMAgg *SMAggregate(SMRange r, NSDate *start, NSDate *end) {
         long p = [tracks[k][1] integerValue];
         if (sec < 1) continue;
         plays += p;
-        NSDictionary *meta = gTracks[k] ?: gImportTracks[k];
+        NSDictionary *meta = gTracks[k] ?: gRecentTracks[k] ?: gImportTracks[k];
         NSString *t = meta[@"t"] ?: [k componentsSeparatedByString:@"—"].firstObject;
         NSString *a = SMCleanArtist(meta[@"a"] ?: @"");
-        [trackList addObject:@{@"t": t, @"a": a, @"key": k, @"sec": @(sec), @"plays": @(p)}];
+        NSString *img = [gRecentTracks[k][@"img"] isKindOfClass:NSString.class] ? gRecentTracks[k][@"img"] : @"";
+        [trackList addObject:@{@"t": t, @"a": a, @"key": k, @"sec": @(sec), @"plays": @(p), @"url": img}];
         for (NSString *name in SMSplitArtists(a)) {
             NSMutableDictionary *ar = artists[name];
-            if (!ar) { ar = [@{@"name": name, @"sec": @0.0, @"plays": @0, @"key": k, @"best": @0.0} mutableCopy]; artists[name] = ar; }
+            if (!ar) { ar = [@{@"name": name, @"sec": @0.0, @"plays": @0, @"key": k, @"best": @0.0, @"url": img} mutableCopy]; artists[name] = ar; }
             ar[@"sec"] = @([ar[@"sec"] doubleValue] + sec);
             ar[@"plays"] = @([ar[@"plays"] integerValue] + p);
-            if (sec > [ar[@"best"] doubleValue]) { ar[@"best"] = @(sec); ar[@"key"] = k; } // pochette de son titre le plus écouté
+            if (sec > [ar[@"best"] doubleValue]) { ar[@"best"] = @(sec); ar[@"key"] = k; ar[@"url"] = img; } // pochette de son titre le plus écouté
         }
     }
     NSSortDescriptor *bySec = [NSSortDescriptor sortDescriptorWithKey:@"sec" ascending:NO];
@@ -601,7 +871,7 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     [super viewDidLoad];
     self.view.backgroundColor = SM_BG;
     _range = [NSUserDefaults.standardUserDefaults integerForKey:@"SoundMatch.statsRange"];
-    if (_range < SMRangeDay || _range > SMRangeYear) _range = SMRangeWeek;
+    if (_range < SMRangeDay || _range > SMRangeSpotify) _range = SMRangeWeek;
 
     // Barre du haut comme les écrans de Spotify : retour à gauche, titre au centre
     _bar = [UIView new];
@@ -670,6 +940,8 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     [self.navigationController setNavigationBarHidden:YES animated:animated];
     SMStatsSave(); // les dernières secondes écoutées sont prises en compte
     [self reload];
+    __weak SMStatsController *weakSelf = self;
+    SMFetchRecent(^{ [weakSelf reload]; });
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -692,7 +964,7 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
 
     // Filtres : Jour, Semaine, Mois, Année (pastilles comme « Tout / Musique / Podcasts »)
     NSMutableArray *pills = [NSMutableArray array];
-    NSArray *names = @[@"Jour", @"Semaine", @"Mois", @"Année"];
+    NSArray *names = @[@"Jour", @"Semaine", @"Mois", @"Année", @"Classement"];
     for (NSUInteger i = 0; i < names.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         [b setTitle:names[i] forState:UIControlStateNormal];
@@ -785,21 +1057,68 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     [self reload];
 }
 
-- (void)prevPeriod { _offset--; [self reload]; }
+- (void)prevPeriod { if (_range == SMRangeSpotify && _offset <= -2) return; _offset--; [self reload]; }
 - (void)nextPeriod { if (_offset < 0) { _offset++; [self reload]; } }
+
+- (void)resizeHeader {
+    UIView *header = _table.tableHeaderView;
+    CGFloat w = _table.bounds.size.width > 0 ? _table.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
+    header.frame = CGRectMake(0, 0, w, 10);
+    [header setNeedsLayout];
+    [header layoutIfNeeded];
+    CGSize fit = [header systemLayoutSizeFittingSize:CGSizeMake(w, 0) withHorizontalFittingPriority:UILayoutPriorityRequired
+                               verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+    header.frame = CGRectMake(0, 0, w, fit.height);
+    _table.tableHeaderView = header;
+    [_table reloadData];
+}
+
+/// Classement calculé par Spotify pour ton compte (4 semaines, 6 mois, environ 1 an).
+- (void)reloadSpotify {
+    NSArray *terms = @[@"short_term", @"medium_term", @"long_term"];
+    NSInteger idx = MIN(2, MAX(0, -_offset));
+    _period.text = @[@"4 dernières semaines", @"6 derniers mois", @"Environ 1 an"][idx];
+    _next.enabled = _offset < 0;
+    _next.alpha = _offset < 0 ? 1 : 0.3;
+    _prev.enabled = idx < 2;
+    _prev.alpha = idx < 2 ? 1 : 0.3;
+    NSDictionary *top = gSpotifyTop[terms[idx]];
+    SMAgg *agg = [SMAgg new];
+    agg.artists = [top[@"artists"] isKindOfClass:NSArray.class] ? top[@"artists"] : @[];
+    agg.tracks = [top[@"tracks"] isKindOfClass:NSArray.class] ? top[@"tracks"] : @[];
+    agg.total = (agg.artists.count || agg.tracks.count) ? 1 : 0;
+    _agg = agg;
+    NSMutableAttributedString *h = [[NSMutableAttributedString alloc] initWithString:@"Ton classement "
+        attributes:@{NSFontAttributeName: SMFont(28, YES), NSForegroundColorAttributeName: UIColor.whiteColor}];
+    [h appendAttributedString:[[NSAttributedString alloc] initWithString:@"Spotify"
+        attributes:@{NSFontAttributeName: SMFont(28, YES), NSForegroundColorAttributeName: SM_GREEN}]];
+    _headline.attributedText = h;
+    NSString *when = gSpotifyTopAt ? [NSString stringWithFormat:@" · mis à jour %@", SMFr(@"d MMM 'à' HH:mm", gSpotifyTopAt)] : @"";
+    _summary.text = gSpotifyStatus ?: (gFetchingTop ? @"Récupération du classement…" :
+        [NSString stringWithFormat:@"Calculé par Spotify pour ton compte (Spotify ne donne pas les minutes de ce classement)%@", when]);
+    _chart.hidden = YES;
+    [self resizeHeader];
+    if (!gFetchingTop && (!gSpotifyTopAt || -gSpotifyTopAt.timeIntervalSinceNow > 1800)) {
+        __weak SMStatsController *weakSelf = self;
+        SMFetchTop(^{ SMStatsController *me = weakSelf; if (me && me->_range == SMRangeSpotify) [me reload]; });
+        if (gFetchingTop) _summary.text = @"Récupération du classement…";
+    }
+}
 
 - (void)reload {
     if (!_table) return;
-    NSDate *start, *end;
-    SMPeriod(_range, _offset, &start, &end);
-    _agg = SMAggregate(_range, start, end);
-    _moreArtists = _moreTracks = NO;
-
     for (UIButton *p in _pills) {
         BOOL on = p.tag == _range;
         p.backgroundColor = on ? SM_GREEN : SM_PILL;
         [p setTitleColor:on ? UIColor.blackColor : UIColor.whiteColor forState:UIControlStateNormal];
     }
+    _moreArtists = _moreTracks = NO;
+    _prev.enabled = YES;
+    _prev.alpha = 1;
+    if (_range == SMRangeSpotify) { [self reloadSpotify]; return; }
+    NSDate *start, *end;
+    SMPeriod(_range, _offset, &start, &end);
+    _agg = SMAggregate(_range, start, end);
     _period.text = SMPeriodLabel(_range, _offset, start, end);
     _next.enabled = _offset < 0;
     _next.alpha = _offset < 0 ? 1 : 0.3;
@@ -822,26 +1141,15 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     if (gImportUntil) {
         NSDate *u = [SMDayFormatter() dateFromString:gImportUntil];
         summary = [summary stringByAppendingFormat:@"\nHistorique Spotify importé jusqu'au %@, puis relevé sur l'iPhone", u ? SMFr(@"d MMMM yyyy", u) : gImportUntil];
-    } else if (_agg.total < 1 || _range >= SMRangeMonth) {
-        summary = [summary stringByAppendingString:@"\nPour tout ton historique Spotify : bouton ⬇︎ en haut à droite"];
     }
+    if (gRecentDays.count) summary = [summary stringByAppendingString:@"\nAvec les dernières écoutes de ton compte Spotify (tous appareils)"];
     _summary.text = summary;
 
     _chart.values = _agg.buckets;
     _chart.labels = _agg.bucketLabels;
     _chart.hidden = _agg.total < 1;
     [_chart setNeedsDisplay];
-
-    UIView *header = _table.tableHeaderView;
-    CGFloat w = _table.bounds.size.width > 0 ? _table.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
-    header.frame = CGRectMake(0, 0, w, 10);
-    [header setNeedsLayout];
-    [header layoutIfNeeded];
-    CGSize fit = [header systemLayoutSizeFittingSize:CGSizeMake(w, 0) withHorizontalFittingPriority:UILayoutPriorityRequired
-                               verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
-    header.frame = CGRectMake(0, 0, w, fit.height);
-    _table.tableHeaderView = header;
-    [_table reloadData];
+    [self resizeHeader];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -933,8 +1241,9 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
         c.rank.text = @"";
         c.art.hidden = YES;
         c.value.text = @"";
-        c.title.text = @"Aucune écoute sur cette période";
-        c.sub.text = @"Les stats sont relevées depuis l'installation de SoundMatch.";
+        BOOL top = _range == SMRangeSpotify;
+        c.title.text = top ? @"Classement pas encore disponible" : @"Aucune écoute sur cette période";
+        c.sub.text = top ? (gSpotifyStatus ?: @"Récupération en cours…") : @"Les stats sont relevées depuis l'installation de SoundMatch.";
         c.selectionStyle = UITableViewCellSelectionStyleNone;
         return c;
     }
@@ -945,6 +1254,16 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
     double sec = [it[@"sec"] doubleValue];
     long plays = [it[@"plays"] integerValue];
     c.value.text = SMMinutes(sec);
+    c.art.image = nil;
+    if (_range == SMRangeSpotify) {
+        c.value.text = @"";
+        c.title.text = ip.section == 0 ? it[@"name"] : it[@"t"];
+        c.sub.text = ip.section == 0 ? it[@"sub"] : it[@"a"];
+        c.art.layer.cornerRadius = ip.section == 0 ? 26 : 4;
+        SMLoadRemote(it[@"img"], c.art);
+        [c setNeedsLayout];
+        return c;
+    }
     if (ip.section == 0) {
         c.title.text = it[@"name"];
         c.sub.text = [NSString stringWithFormat:@"%ld écoute%@", plays, plays > 1 ? @"s" : @""];
@@ -954,7 +1273,10 @@ static NSString *SMArtFor(NSString *key, NSString *title) {
         c.sub.text = [NSString stringWithFormat:@"%@ · %ld écoute%@", it[@"a"], plays, plays > 1 ? @"s" : @""];
         c.art.layer.cornerRadius = 4;
     }
-    c.art.image = [UIImage imageWithContentsOfFile:SMArtFor(it[@"key"], ip.section == 0 ? nil : it[@"t"])];
+    NSString *local = SMArtFor(it[@"key"], ip.section == 0 ? nil : it[@"t"]);
+    c.art.accessibilityIdentifier = nil;
+    if (local) c.art.image = [UIImage imageWithContentsOfFile:local];
+    else SMLoadRemote(it[@"url"], c.art);
     [c setNeedsLayout];
     return c;
 }
