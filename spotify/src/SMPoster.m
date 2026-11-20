@@ -75,6 +75,8 @@ static void SMDrawLine(NSString *text, CGRect rect, UIFont *font, UIColor *color
             attributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: color, NSParagraphStyleAttributeName: ps} context:nil];
 }
 
+static CGPoint SMPt(CGPoint o, CGFloat k, double px, double py) { return CGPointMake(o.x + px * k, o.y + py * k); }
+
 /// Petit lecteur de tracés SVG (commandes M, C, c, z) : assez pour le logo.
 static UIBezierPath *SMSVGPath(NSString *d, CGFloat scale, CGPoint origin) {
     UIBezierPath *p = [UIBezierPath bezierPath];
@@ -83,7 +85,6 @@ static UIBezierPath *SMSVGPath(NSString *d, CGFloat scale, CGPoint origin) {
     NSCharacterSet *cmds = [NSCharacterSet characterSetWithCharactersInString:@"MmCcLlZz"];
     unichar cmd = 'M';
     CGPoint cur = CGPointZero;
-#define SMPT(x, y) CGPointMake(origin.x + (x) * scale, origin.y + (y) * scale)
     while (!sc.isAtEnd) {
         NSString *c = nil;
         if ([sc scanCharactersFromSet:cmds intoString:&c] && c.length) cmd = [c characterAtIndex:c.length - 1];
@@ -97,17 +98,16 @@ static UIBezierPath *SMSVGPath(NSString *d, CGFloat scale, CGPoint origin) {
         if (rel) for (int i = 0; i < need; i++) v[i] += (i % 2 == 0) ? cur.x : cur.y;
         if (cmd == 'M' || cmd == 'm') {
             cur = CGPointMake(v[0], v[1]);
-            [p moveToPoint:SMPT(cur.x, cur.y)];
+            [p moveToPoint:SMPt(origin, scale, cur.x, cur.y)];
             cmd = rel ? 'l' : 'L';
         } else if (cmd == 'L' || cmd == 'l') {
             cur = CGPointMake(v[0], v[1]);
-            [p addLineToPoint:SMPT(cur.x, cur.y)];
+            [p addLineToPoint:SMPt(origin, scale, cur.x, cur.y)];
         } else {
-            [p addCurveToPoint:SMPT(v[4], v[5]) controlPoint1:SMPT(v[0], v[1]) controlPoint2:SMPT(v[2], v[3])];
+            [p addCurveToPoint:SMPt(origin, scale, v[4], v[5]) controlPoint1:SMPt(origin, scale, v[0], v[1]) controlPoint2:SMPt(origin, scale, v[2], v[3])];
             cur = CGPointMake(v[4], v[5]);
         }
     }
-#undef SMPT
     return p;
 }
 
