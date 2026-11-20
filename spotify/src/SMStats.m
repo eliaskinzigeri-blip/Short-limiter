@@ -1963,13 +1963,10 @@ BOOL SMSettingsInject(NSArray<UIWindow *> *windows, void (^calibrate)(void), voi
             return NO;
         }
         SMLearnFonts(sv);
-        __weak UIViewController *weakTarget = target;
         NSArray *rows = isEq
             ? @[@[@"Calibrer avec SoundMatch", @"Trouver mon égaliseur en comparant des versions d'un morceau", @"slider.vertical.3", calibrate],
                 @[@"Options SoundMatch", @"Saisir des valeurs, remettre l'ancien égaliseur…", @"ellipsis.circle", menu]]
-            : @[@[@"Stats d'écoute", @"Minutes, titres et artistes par jour, semaine, mois, année", @"chart.bar.fill",
-                  ^{ UIViewController *t = weakTarget; if (t) SMOpenStats(t); }],
-                @[@"SoundMatch", @"Calibrer l'égaliseur et options", @"slider.vertical.3", menu]];
+            : @[@[@"SoundMatch", @"Calibrer l'égaliseur et options", @"slider.vertical.3", menu]];
         SMInstallRows(sv, rows);
         if (![logged containsObject:name]) {
             [logged addObject:name];
@@ -1981,3 +1978,70 @@ BOOL SMSettingsInject(NSArray<UIWindow *> *windows, void (^calibrate)(void), voi
 }
 
 void SMStatsOpenFrom(UIViewController *from) { SMOpenStats(from); }
+
+#pragma mark - « Stats d'écoute » dans le menu du profil
+
+static void SMCollectVCs(UIViewController *vc, NSMutableArray *out, int depth) {
+    if (!vc || depth > 30) return;
+    [out addObject:vc];
+    for (UIViewController *c in vc.childViewControllers) SMCollectVCs(c, out, depth + 1);
+    if (vc.presentedViewController.presentingViewController == vc) SMCollectVCs(vc.presentedViewController, out, depth + 1);
+}
+
+/// Dans le menu ouvert en touchant la photo de profil, la ligne « Stats d'écoute » de Spotify ouvre celles de SoundMatch.
+void SMDrawerInject(NSArray<UIWindow *> *windows) {
+    static const NSInteger tag = 0x5D5708;
+    static NSMutableSet *logged;
+    if (!logged) logged = [NSMutableSet set];
+    for (UIWindow *w in windows) {
+        NSMutableArray *vcs = [NSMutableArray array];
+        SMCollectVCs(w.rootViewController, vcs, 0);
+        for (UIViewController *vc in vcs) {
+            if (![NSStringFromClass(vc.class).lowercaseString containsString:@"sidedrawer"]) continue;
+            if (!vc.isViewLoaded || !vc.view.window) continue;
+            NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:vc.view];
+            NSMutableArray *texts = [NSMutableArray array];
+            BOOL done = NO;
+            int seen = 0;
+            while (stack.count && seen < 3000) {
+                UIView *v = stack.lastObject; [stack removeLastObject]; seen++;
+                [stack addObjectsFromArray:v.subviews];
+                if (![v isKindOfClass:UILabel.class]) continue;
+                NSString *text = [(UILabel *)v text];
+                if (!text.length) continue;
+                if (texts.count < 25) [texts addObject:text];
+                NSString *f = [text stringByFoldingWithOptions:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch locale:nil];
+                if (![f isEqualToString:@"stats d'ecoute"] && ![f isEqualToString:@"stats d’ecoute"] && ![f isEqualToString:@"listening stats"]) continue;
+                // Ligne entière : on remonte jusqu'à la cellule (ou une vue large et pas trop haute)
+                UIView *row = v;
+                for (UIView *u = v.superview; u && u != vc.view; u = u.superview) {
+                    row = u;
+                    if ([u isKindOfClass:UITableViewCell.class] || [u isKindOfClass:UICollectionViewCell.class]) break;
+                    if (u.bounds.size.width >= vc.view.bounds.size.width * 0.5 && u.bounds.size.height >= 36 && u.bounds.size.height <= 120) break;
+                }
+                done = YES;
+                if ([row viewWithTag:tag]) continue;
+                SMRowControl *ctl = [[SMRowControl alloc] initWithFrame:row.bounds];
+                ctl.tag = tag;
+                ctl.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                __weak UIViewController *weakVC = vc;
+                ctl.action = ^{
+                    UIViewController *top = weakVC.view.window.rootViewController;
+                    while (top.presentedViewController) top = top.presentedViewController;
+                    if (top) SMOpenStats(top);
+                };
+                [ctl addTarget:ctl action:@selector(fire) forControlEvents:UIControlEventTouchUpInside];
+                [row addSubview:ctl];
+                [row bringSubviewToFront:ctl];
+                if (![logged containsObject:@"drawer"]) {
+                    [logged addObject:@"drawer"];
+                    SMLogPublic([NSString stringWithFormat:@"Menu du profil : « %@ » ouvre les stats SoundMatch (%@)", text, NSStringFromClass(row.class)]);
+                }
+            }
+            if (!done && ![logged containsObject:@"drawer-miss"]) {
+                [logged addObject:@"drawer-miss"];
+                SMLogPublic([@"Menu du profil : ligne Stats d'écoute introuvable, textes vus : " stringByAppendingString:[texts componentsJoinedByString:@" | "]]);
+            }
+        }
+    }
+}

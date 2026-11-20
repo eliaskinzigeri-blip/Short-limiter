@@ -19,4 +19,7 @@ void SMPosterPresent(UIViewController *from, NSString *period, NSString *minutes
 
 /// Ajoute les lignes SoundMatch dans l'écran des paramètres affiché (racine des paramètres et égaliseur).
 /// Renvoie YES si les lignes sont visibles à l'écran (le bouton flottant devient alors inutile).
+/// Menu du profil : la ligne « Stats d'écoute » ouvre les stats SoundMatch.
+void SMDrawerInject(NSArray<UIWindow *> *windows);
+
 BOOL SMSettingsInject(NSArray<UIWindow *> *windows, void (^calibrate)(void), void (^menu)(void));

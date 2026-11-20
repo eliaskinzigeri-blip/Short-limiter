@@ -7,7 +7,7 @@ n'est copié.
 
 ## Stats d'écoute
 
-Paramètres de Spotify → ligne **Stats d'écoute** (ajoutée en haut de la liste) :
+Touche ta **photo de profil** (en haut à gauche) → **Stats d'écoute** : la ligne de Spotify ouvre celles de SoundMatch :
 
 - filtres **Jour / Semaine / Mois / Année**, avec les flèches ‹ › pour remonter aux périodes précédentes ;
 - **minutes écoutées** sur la période, nombre de titres, d'artistes et d'écoutes, et un graphique (par heure, par
@@ -60,7 +60,7 @@ fonctions audio sont interceptées en réécrivant les tables d'import (principe
 
 1. Télécharge https://github.com/eliaskinzigeri-blip/short-limiter/releases/download/spotify-latest/SoundMatch.dylib
 2. LiveContainer → onglet **Tweaks** → **+** → ajoute `SoundMatch.dylib`, puis touche le bouton **signature**.
-3. Lance Spotify **depuis LiveContainer** : les lignes « Stats d'écoute » et « SoundMatch » apparaissent en haut des Paramètres.
+3. Lance Spotify **depuis LiveContainer** : la ligne « SoundMatch » apparaît en haut des Paramètres, et « Stats d'écoute » du menu du profil ouvre les stats SoundMatch.
 
 Si « Son de Spotify détecté » n'apparaît pas pendant le test alors que la musique joue, envoie le journal
 (menu → Partager le journal) : il indique si la sortie audio de Spotify a été trouvée et son format.

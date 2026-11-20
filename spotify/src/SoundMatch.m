@@ -744,6 +744,7 @@ static UIColor *SMGreen(void) { return [UIColor colorWithRed:0.11 green:0.73 blu
             [me openTest];
         }, ^{ [weakSelf openMenu]; });
     }
+    if (!_testing) SMDrawerInject([self appWindows]);
     _inSettings = !_testing && !rows && [self settingsVisible];
     if (gAttachedCount == 0 && !_loggedAttached && gLastRender == 0) {
         // rien encore : normal tant qu'aucune musique n'a été lancée
