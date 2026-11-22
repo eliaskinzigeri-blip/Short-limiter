@@ -76,3 +76,8 @@ NSString *SLDayName(NSInteger day); // 0 = tous les jours, 1 = lundi … 7 = dim
 void SLInstallYouTubeSettings(void);
 void SLDecorateSettings(void);     // icône barrée de la rubrique dans les Paramètres de YouTube
 UIWindowScene *SLActiveScene(void);
+// Reprise des vidéos là où on s'était arrêté (pas les Shorts, indépendant de l'historique YouTube)
+void SLResumeTick(BOOL onShorts);
+void SLResumeFlush(void);
+BOOL SLResumeEnabled(void);
+void SLResumeSetEnabled(BOOL on);

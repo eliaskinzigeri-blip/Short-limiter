@@ -229,6 +229,9 @@ static void SLBuildSection(id manager) {
     add(SLSwitch(@"Compteur pendant les Shorts", @"Affiche le temps utilisé en haut de l'écran", c.showCounter,
                  ^BOOL(id cell, BOOL on) { SLCore.shared.showCounter = on; return YES; }));
 
+    add(SLSwitch(@"Reprendre les vidéos", @"Une vidéo repart là où tu t'étais arrêté (pas les Shorts, même sans l'historique YouTube)",
+                 SLResumeEnabled(), ^BOOL(id cell, BOOL on) { SLResumeSetEnabled(on); return YES; }));
+
     add(SLItem(@"Historique et détection", @"Jours précédents, noms d'écrans, journal", nil, ^BOOL(id cell, NSUInteger arg) {
         [[SLOverlay shared] presentSettings];
         return YES;

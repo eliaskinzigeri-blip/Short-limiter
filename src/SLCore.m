@@ -267,6 +267,7 @@ static NSDate *SLNextMidnight(void) {
 - (NSArray<NSDictionary *> *)history { return [_history copy]; }
 
 - (void)save {
+    SLResumeFlush();
     [_d setDouble:_usedSeconds forKey:SLKey("used")];
     [_d setDouble:_blockedUntil ? _blockedUntil.timeIntervalSince1970 : 0 forKey:SLKey("blockedUntil")];
     [_d setObject:_today forKey:SLKey("today")];
@@ -351,6 +352,7 @@ static NSDate *SLNextMidnight(void) {
         }
     }
     _lastTick = now;
+    if (active) SLResumeTick(on);
 
     if (on && self.isBlocked) [self tryExit:NO];
     [[SLOverlay shared] refresh];

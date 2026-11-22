@@ -33,6 +33,10 @@ téléchargée, embarquée ni publiée** : tu fournis toi-même ton app.
 - **Réglages et statistiques du jour** : rubrique **Shorts Limiter** (logo Shorts) dans les **Paramètres de YouTube**,
   avec les cellules et sélecteurs de YouTube (limite, durée de pause, compteur). Historique et détection avancée :
   dernière ligne de la rubrique, appui long à trois doigts n'importe où, ou toucher le compteur. Tout est enregistré (NSUserDefaults) et survit à la fermeture de l'app.
+- **Reprise des vidéos** : dès que tu quittes une vidéo classique (pas un Short), sa position est gardée sur
+  l'iPhone, même si l'historique YouTube est en pause. Quand tu y reviens, elle repart à cet endroit et le message
+  « Retour là où vous vous êtes arrêté » s'affiche 3 secondes. Une vidéo regardée jusqu'au bout repart du début.
+  Option « Reprendre les vidéos » dans la rubrique Shorts Limiter.
 - **Journal** : `Documents/ShortLimiter-journal.txt` de l'app, aussi visible et partageable depuis les réglages
   (« Voir le journal »). Il liste les écrans vus (nom de classe et part de l'écran) pour ajuster la détection.
 
